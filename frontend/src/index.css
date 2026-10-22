@@ -1,90 +1,137 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&family=DM+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-    margin: 0;
-    font-family: 'DM Sans', sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+@layer base {
+  /* =========================================================================
+     EXACT SIGNATURE 4-COLOR PALETTE:
+     1. Moon Mist:        #DCDCCA (RGB: 220 220 202) -> Cards & Elevated Panels
+     2. Pastel Stone:     #C4C0AC (RGB: 196 192 172) -> Entire Website Canvas Background
+     3. Schooner:         #88867C (RGB: 136 134 124) -> Borders, Lines & Secondary Accents
+     4. Attractive Black: #222222 (RGB: 34 34 34)    -> Typography, Headings & Primary Buttons
+     ========================================================================= */
+  :root,
+  .dark,
+  .theme-warmstone,
+  .theme-obsidian,
+  .theme-emerald,
+  .theme-navy,
+  .theme-cashmere {
+    --background: 50 17% 72%;          /* #C4C0AC - Pastel Stone */
+    --foreground: 0 0% 13%;            /* #222222 - Attractive Black */
+    --card: 60 20% 83%;                /* #DCDCCA - Moon Mist */
+    --card-foreground: 0 0% 13%;       /* #222222 - Attractive Black */
+    --popover: 60 20% 83%;             /* #DCDCCA - Moon Mist */
+    --popover-foreground: 0 0% 13%;    /* #222222 - Attractive Black */
+    --primary: 0 0% 13%;               /* #222222 - Attractive Black */
+    --primary-foreground: 60 20% 83%;  /* #DCDCCA - Moon Mist */
+    --secondary: 60 20% 83%;           /* #DCDCCA - Moon Mist */
+    --secondary-foreground: 0 0% 13%;  /* #222222 - Attractive Black */
+    --muted: 50 17% 72%;               /* #C4C0AC - Pastel Stone */
+    --muted-foreground: 50 5% 42%;     /* #6E6C63 - Legible Schooner */
+    --accent: 0 0% 13%;                /* #222222 - Attractive Black */
+    --accent-foreground: 60 20% 83%;   /* #DCDCCA - Moon Mist */
+    --destructive: 0 0% 13%;
+    --destructive-foreground: 60 20% 83%;
+    --border: 50 5% 51%;               /* #88867C - Schooner */
+    --input: 50 5% 51%;                /* #88867C - Schooner */
+    --ring: 0 0% 13%;                  /* #222222 - Attractive Black */
+    --radius: 0.85rem;
+
+    /* Multi-color Chart Tokens mapped to the 4 signature colors */
+    --chart-indigo: #222222;
+    --chart-emerald: #88867C;
+    --chart-purple: #222222;
+    --chart-amber: #88867C;
+    --chart-rose: #222222;
+    --chart-cyan: #88867C;
+
+    --ambient-glow-1: rgba(34, 34, 34, 0.04);
+    --ambient-glow-2: rgba(136, 134, 124, 0.05);
+    --card-specular: rgba(220, 220, 202, 0.4);
+  }
 }
 
-code {
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Plus Jakarta Sans', 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    min-height: 100vh;
+    background-color: #C4C0AC; /* Pastel Stone */
+    color: #222222; /* Attractive Black */
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -0.025em;
+    color: #222222;
+  }
+  code, pre, .font-mono {
     font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-@layer base {
-    :root {
-        --background: 210 40% 98%;
-        --foreground: 222 47% 11%;
-        --card: 0 0% 100%;
-        --card-foreground: 222 47% 11%;
-        --popover: 0 0% 100%;
-        --popover-foreground: 222 47% 11%;
-        --primary: 162 76% 13%;
-        --primary-foreground: 0 0% 100%;
-        --secondary: 139 38% 95%;
-        --secondary-foreground: 162 76% 13%;
-        --muted: 210 40% 96%;
-        --muted-foreground: 215 16% 47%;
-        --accent: 84 81% 54%;
-        --accent-foreground: 162 76% 13%;
-        --destructive: 0 84% 60%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 214 32% 91%;
-        --input: 214 32% 91%;
-        --ring: 162 76% 13%;
-        --chart-1: 162 76% 13%;
-        --chart-2: 84 81% 54%;
-        --chart-3: 158 64% 22%;
-        --chart-4: 141 69% 73%;
-        --chart-5: 164 86% 9%;
-        --radius: 0.125rem;
-    }
+/* Glassmorphism strictly adhering to Moon Mist & Schooner */
+.glass-panel {
+  background: rgba(220, 220, 202, 0.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(136, 134, 124, 0.45);
+  box-shadow: 0 4px 20px -2px rgba(34, 34, 34, 0.08);
 }
 
-@layer base {
-    * {
-        @apply border-border;
-    }
-    body {
-        @apply bg-background text-foreground font-body;
-    }
-    h1, h2, h3, h4, h5, h6 {
-        @apply font-heading;
-    }
+.glass-dropdown {
+  background: rgba(220, 220, 202, 0.98);
+  backdrop-filter: blur(24px);
+  border: 1px solid #88867C;
+  box-shadow: 0 20px 35px -5px rgba(34, 34, 34, 0.15), 0 8px 12px -6px rgba(34, 34, 34, 0.10);
 }
 
-@layer base {
-    [data-debug-wrapper="true"] {
-        display: contents !important;
-    }
+/* Elevated Card Styling & Specular Highlights */
+.bg-card {
+  box-shadow: inset 0 1px 0 0 var(--card-specular, rgba(255, 255, 255, 0.08)), 0 4px 20px -2px rgba(0, 0, 0, 0.40);
+}
 
-    [data-debug-wrapper="true"] > * {
-        margin-left: inherit;
-        margin-right: inherit;
-        margin-top: inherit;
-        margin-bottom: inherit;
-        padding-left: inherit;
-        padding-right: inherit;
-        padding-top: inherit;
-        padding-bottom: inherit;
-        column-gap: inherit;
-        row-gap: inherit;
-        gap: inherit;
-        border-left-width: inherit;
-        border-right-width: inherit;
-        border-top-width: inherit;
-        border-bottom-width: inherit;
-        border-left-style: inherit;
-        border-right-style: inherit;
-        border-top-style: inherit;
-        border-bottom-style: inherit;
-        border-left-color: inherit;
-        border-right-color: inherit;
-        border-top-color: inherit;
-        border-bottom-color: inherit;
-    }
+/* Vibrant Gradients & Badges */
+.gradient-text {
+  background: linear-gradient(135deg, #222222 0%, #444444 60%, #88867C 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-badge-indigo {
+  background: #DCDCCA;
+  color: #222222;
+  border: 1px solid #88867C;
+}
+
+.gradient-badge-emerald {
+  background: #DCDCCA;
+  color: #222222;
+  border: 1px solid #88867C;
+}
+
+.gradient-badge-amber {
+  background: #DCDCCA;
+  color: #222222;
+  border: 1px solid #88867C;
+}
+
+/* Interactive Card Elevation */
+.card-hover-effect {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-hover-effect:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px -8px rgba(34, 34, 34, 0.15);
+}
+
+/* Tabular Numbers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }

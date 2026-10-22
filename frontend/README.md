@@ -1,6 +1,6 @@
-# TrueWorth - Frontend Application
+# Valuo - Frontend Application
 
-Modern React 19 single-page application for real estate valuation and property price prediction.
+Minimalist React 19 single-page application for real estate valuation, exploratory data analysis, and predictive modeling.
 
 ## Tech Stack
 - **Framework**: React 19 with React Router DOM v7
@@ -8,6 +8,7 @@ Modern React 19 single-page application for real estate valuation and property p
 - **Charts**: Recharts
 - **Icons**: Lucide React
 - **Notifications**: Sonner
+- **HTTP Client**: Axios with JWT token interceptors
 
 ## Setup & Running
 

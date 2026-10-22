@@ -1,1 +1,16 @@
-["bath", "balcony", "area_type_Built-up  Area", "area_type_Carpet  Area", "area_type_Plot  Area", "area_type_Super built-up  Area", "availability_18-Apr", "availability_18-Aug", "availability_18-Dec", "availability_18-Jul", "availability_18-Mar", "availability_18-May", "availability_19-Dec", "availability_20-Dec", "availability_Ready To Move", "availability_infrequent_sklearn", "size_1 BHK", "size_2 BHK", "size_2 Bedroom", "size_3 BHK", "size_3 Bedroom", "size_4 BHK", "size_4 Bedroom", "size_5 Bedroom", "size_6 Bedroom", "size_infrequent_sklearn"]
+[
+  "total_sqft",
+  "log_sqft",
+  "bhk",
+  "bath",
+  "balcony",
+  "sqft_per_bhk",
+  "bath_per_bhk",
+  "is_ready",
+  "loc_encoded_pps",
+  "log_loc_pps",
+  "loc_frequency",
+  "area_encoded_pps",
+  "expected_baseline_price",
+  "log_baseline_price"
+]

@@ -1,13 +1,21 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import axios from "axios";
 import { toast } from "sonner";
-import { ArrowRight, Loader2, CheckCircle2, Cpu, Zap } from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import {
+  ArrowRight,
+  Sliders,
+  CheckCircle2,
+  Cpu,
+  Zap,
+  Layers,
+  Sparkles,
+  Target,
+  ShieldCheck,
+  Building2,
+  BarChart3,
+} from "lucide-react";
+import api from "@/lib/api";
+import { StageFooterNav } from "@/components/PipelineFlowNav";
 
 export default function TrainPage() {
   const { datasetId } = useParams();
@@ -15,162 +23,310 @@ export default function TrainPage() {
   const [searchParams] = useSearchParams();
   const targetFromUrl = searchParams.get("target");
 
-  // Default all models to selected for "Automatic" feel
-  const [selectedModels, setSelectedModels] = useState([
-    "LinearRegression",
-    "RandomForest",
-    "XGBoost",
-    "LightGBM",
-  ]);
+  const [meta, setMeta] = useState(null);
+  const [targetColumn, setTargetColumn] = useState(targetFromUrl || "");
+  const [testSplit, setTestSplit] = useState(0.2);
+  const [randomState, setRandomState] = useState(42);
+
+  // Exactly two models: Random Forest and XGBoost (FR-5.1)
+  const [selectedModels, setSelectedModels] = useState(["RandomForest", "XGBoost"]);
   const [training, setTraining] = useState(false);
+  const [loadingMeta, setLoadingMeta] = useState(true);
+
+  useEffect(() => {
+    async function loadMeta() {
+      try {
+        const res = await api.get(`/meta/${datasetId}`);
+        setMeta(res.data);
+        if (!targetColumn) {
+          if (res.data.suggested_targets?.length > 0) {
+            setTargetColumn(res.data.suggested_targets[0]);
+          } else if (res.data.numeric_columns?.length > 0) {
+            setTargetColumn(res.data.numeric_columns[0]);
+          }
+        }
+      } catch (err) {
+        toast.error("Failed to load dataset metadata.");
+      } finally {
+        setLoadingMeta(false);
+      }
+    }
+    loadMeta();
+  }, [datasetId, targetColumn]);
 
   const models = [
-    { 
-      name: "LinearRegression", 
-      label: "Linear Regression", 
-      desc: "Fast, interpretable baseline." 
+    {
+      name: "RandomForest",
+      label: "Random Forest Regressor",
+      tag: "Bootstrap Aggregation (Bagging)",
+      desc: "Constructs 50 randomized decision trees with bootstrap sub-sampling. Highly resilient against non-linear interactions and property outliers without overfitting.",
+      specs: "50 estimators • max_depth 15 • RobustScaler + OneHotEncoder",
+      icon: Layers,
+      color: "from-emerald-500/10 via-card to-card border-emerald-500/30",
+      accentText: "text-emerald-600 dark:text-emerald-400",
+      iconBg: "bg-emerald-500/10 text-emerald-500",
     },
-    { 
-      name: "RandomForest", 
-      label: "Random Forest", 
-      desc: "Robust, handles non-linear data well." 
-    },
-    { 
-      name: "XGBoost", 
-      label: "XGBoost", 
-      desc: "High performance gradient boosting." 
-    },
-    { 
-      name: "LightGBM", 
-      label: "LightGBM", 
-      desc: "Fast training, high efficiency." 
+    {
+      name: "XGBoost",
+      label: "XGBoost Regressor",
+      tag: "Regularized Gradient Boosting",
+      desc: "Second-order gradient boosted decision trees with explicit L1/L2 regularization shrinkage. Optimized for high predictive precision on structured real estate features.",
+      specs: "50 estimators • max_depth 10 • RobustScaler + OneHotEncoder",
+      icon: Zap,
+      color: "from-purple-500/10 via-card to-card border-purple-500/30",
+      accentText: "text-purple-600 dark:text-purple-400",
+      iconBg: "bg-purple-500/10 text-purple-500",
     },
   ];
 
   const handleModelToggle = (modelName) => {
-    setSelectedModels((prev) =>
-      prev.includes(modelName)
-        ? prev.filter((m) => m !== modelName)
-        : [...prev, modelName]
-    );
+    setSelectedModels((prev) => {
+      if (prev.includes(modelName)) {
+        if (prev.length === 1) {
+          toast.error("At least one model must be selected for training.");
+          return prev;
+        }
+        return prev.filter((m) => m !== modelName);
+      } else {
+        return [...prev, modelName];
+      }
+    });
   };
 
-  const handleAutoTrain = async () => {
+  const handleTrain = async () => {
     if (selectedModels.length === 0) {
-      toast.error("Please select at least one model");
+      toast.error("Please select at least one model to train.");
       return;
     }
 
-    if (!targetFromUrl) {
-      toast.error("Target column not specified");
+    if (!targetColumn) {
+      toast.error("Please specify a target column.");
       return;
     }
 
     setTraining(true);
 
     try {
-      // ✅ We hardcode standard defaults here for "Auto" mode
-      const response = await axios.post(`${API}/train`, {
+      const response = await api.post("/train", {
         dataset_id: datasetId,
-        target_column: targetFromUrl,
+        target_column: targetColumn,
         models: selectedModels,
-        test_size: 0.2,     // Standard Default
-        random_state: 42,   // Standard Default
-        cv_folds: 5,        // Auto-enable 5-fold CV for robust results
+        test_size: parseFloat(testSplit),
+        random_state: parseInt(randomState, 10),
       });
 
-      toast.success(`Training complete! Best model: ${response.data.best_model}`);
+      toast.success(
+        `Training complete. Best performing model: ${response.data.best_model}`
+      );
       navigate(`/compare/${datasetId}`);
     } catch (error) {
-      toast.error(error.response?.data?.detail || "Training failed");
+      toast.error(error.response?.data?.detail || "Model training failed.");
     } finally {
       setTraining(false);
     }
   };
 
+  if (loadingMeta) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 space-y-3">
+        <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent animate-spin rounded-full" />
+        <p className="text-xs font-mono text-muted-foreground">Loading model training configuration...</p>
+      </div>
+    );
+  }
+
+  const numericCols = meta?.numeric_columns || [];
+
   return (
-    <div className="max-w-5xl mx-auto space-y-8 py-10">
-      <div className="text-center space-y-4">
-        <div className="inline-flex items-center justify-center p-3 bg-primary/10 rounded-full mb-2">
-          <Cpu className="w-8 h-8 text-primary" />
+    <div className="max-w-5xl mx-auto space-y-10 text-left">
+      {/* Header Banner */}
+      <div className="border-b border-border/80 pb-6">
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-purple-500/10 text-purple-600 dark:text-purple-400 text-xs font-semibold mb-2">
+          <Cpu className="w-3.5 h-3.5" />
+          <span>Stage 3 • AI Model Studio</span>
         </div>
-        <h1 className="text-4xl font-heading font-bold text-foreground">
-          Auto-Train Models
+        <h1 className="text-3xl font-heading font-extrabold text-foreground tracking-tight">
+          AI Model Studio & Dual-Engine Training
         </h1>
-        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-          Select the algorithms you want to utilize. We will automatically configure hyperparameters, 
-          split the data, and run cross-validation to find the best results.
+        <p className="text-xs text-muted-foreground mt-1.5 max-w-2xl leading-relaxed">
+          Configure held-out evaluation splits and fit high-performance Random Forest and regularized XGBoost models in parallel.
         </p>
-        {targetFromUrl && (
-          <div className="inline-block bg-accent/20 text-accent-foreground px-4 py-1.5 rounded-full text-sm font-medium font-mono">
-            Target Variable: {targetFromUrl}
-          </div>
-        )}
       </div>
 
-      {/* Model Selection Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
-        {models.map((model) => {
-          const isSelected = selectedModels.includes(model.name);
-          return (
-            <div
-              key={model.name}
-              onClick={() => handleModelToggle(model.name)}
-              className={`
-                relative p-6 cursor-pointer transition-all duration-200 border-2 rounded-xl group
-                ${isSelected 
-                  ? "border-primary bg-primary/5 shadow-md" 
-                  : "border-border bg-card hover:border-primary/50"
-                }
-              `}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className={`
-                    p-2 rounded-lg transition-colors
-                    ${isSelected ? "bg-primary text-white" : "bg-muted text-muted-foreground"}
-                  `}>
-                    <Zap className="w-5 h-5" />
+      {/* Model Selection Cards */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-bold text-foreground">Models to Train & Benchmark</h2>
+          <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-secondary text-muted-foreground">
+            {selectedModels.length} of 2 Active
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {models.map((model) => {
+            const isSelected = selectedModels.includes(model.name);
+            const Icon = model.icon;
+            return (
+              <div
+                key={model.name}
+                onClick={() => handleModelToggle(model.name)}
+                className={`p-6 rounded-2xl border-2 cursor-pointer transition-all duration-300 relative shadow-sm hover:shadow-xl ${
+                  isSelected
+                    ? `bg-gradient-to-br ${model.color} scale-[1.01]`
+                    : "bg-card border-border hover:border-foreground/30 opacity-70"
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-xl ${model.iconBg} flex items-center justify-center`}>
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                        {model.tag}
+                      </span>
+                      <h3 className="text-base font-bold text-foreground mt-0.5">
+                        {model.label}
+                      </h3>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-lg">{model.label}</h3>
-                    <p className="text-sm text-muted-foreground">{model.desc}</p>
+
+                  <div
+                    className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${
+                      isSelected
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "border border-border bg-secondary"
+                    }`}
+                  >
+                    {isSelected && <CheckCircle2 className="w-4 h-4 text-white" />}
                   </div>
                 </div>
-                
-                {/* Checkbox Indicator */}
-                <div className={`
-                  w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
-                  ${isSelected ? "border-primary bg-primary text-white" : "border-muted-foreground/30"}
-                `}>
-                  {isSelected && <CheckCircle2 className="w-4 h-4" />}
+
+                <p className="text-xs text-muted-foreground mt-4 leading-relaxed">
+                  {model.desc}
+                </p>
+
+                <div className="mt-4 pt-3 border-t border-border/60 text-[11px] font-mono text-muted-foreground">
+                  {model.specs}
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
-      <div className="flex justify-center pt-8">
-        <Button
-          onClick={handleAutoTrain}
-          disabled={training || selectedModels.length === 0}
-          size="lg"
-          className="w-full md:w-1/2 h-14 text-lg font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all"
-        >
-          {training ? (
-            <>
-              <Loader2 className="w-6 h-6 mr-2 animate-spin" />
-              Running AutoML Process...
-            </>
-          ) : (
-            <>
-              Start Auto-Training
-              <ArrowRight className="w-6 h-6 ml-2" />
-            </>
-          )}
-        </Button>
+      {/* Training Hyperparameters Panel */}
+      <div className="bg-card border border-border rounded-2xl p-6 sm:p-8 space-y-6 shadow-md">
+        <h2 className="text-base font-bold text-foreground border-b border-border/80 pb-4 flex items-center gap-2">
+          <Sliders className="w-4 h-4 text-indigo-500" />
+          <span>Training Hyperparameters</span>
+        </h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          {/* Target Column */}
+          <div className="space-y-1.5">
+            <label
+              htmlFor="target-column-select"
+              className="block text-xs font-bold text-foreground uppercase tracking-wider"
+            >
+              Target Variable (Y)
+            </label>
+            <select
+              id="target-column-select"
+              value={targetColumn}
+              onChange={(e) => setTargetColumn(e.target.value)}
+              className="w-full px-3 py-2.5 text-xs rounded-xl border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
+            >
+              {numericCols.map((col) => (
+                <option key={col} value={col}>
+                  {col} {meta?.suggested_targets?.includes(col) ? "★ (Target Price)" : ""}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              Continuous property valuation target
+            </p>
+          </div>
+
+          {/* Test Split */}
+          <div className="space-y-1.5">
+            <label
+              htmlFor="test-split-input"
+              className="block text-xs font-bold text-foreground uppercase tracking-wider"
+            >
+              Test Split Ratio
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id="test-split-input"
+                type="number"
+                min="0.1"
+                max="0.4"
+                step="0.05"
+                value={testSplit}
+                onChange={(e) => setTestSplit(e.target.value)}
+                className="w-full px-3 py-2.5 text-xs font-mono rounded-xl border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all tabular-nums"
+              />
+              <span className="text-xs font-mono text-muted-foreground whitespace-nowrap font-bold">
+                {(testSplit * 100).toFixed(0)}% Held-Out
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Held out for out-of-sample validation
+            </p>
+          </div>
+
+          {/* Random Seed */}
+          <div className="space-y-1.5">
+            <label
+              htmlFor="random-seed-input"
+              className="block text-xs font-bold text-foreground uppercase tracking-wider"
+            >
+              Reproducibility Seed
+            </label>
+            <input
+              id="random-seed-input"
+              type="number"
+              value={randomState}
+              onChange={(e) => setRandomState(e.target.value)}
+              className="w-full px-3 py-2.5 text-xs font-mono rounded-xl border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all tabular-nums"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Deterministic train/test partition seed
+            </p>
+          </div>
+        </div>
+
+        {/* Start Training Action */}
+        <div className="pt-4 border-t border-border/80 flex items-center justify-between">
+          <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-500" />
+            <span>RobustScaler + OneHotEncoder automatic preprocessing</span>
+          </div>
+
+          <button
+            onClick={handleTrain}
+            disabled={training || selectedModels.length === 0}
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 transition-all cursor-pointer"
+          >
+            {training ? (
+              <>
+                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent animate-spin rounded-full" />
+                <span>Fitting Regression Ensembles...</span>
+              </>
+            ) : (
+              <>
+                <Cpu className="w-4 h-4" />
+                <span>Start Dual Model Training</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+        </div>
       </div>
+
+      {/* Workflow Stage Footer Navigator */}
+      <StageFooterNav currentStepId="studio" datasetId={datasetId} />
     </div>
   );
 }

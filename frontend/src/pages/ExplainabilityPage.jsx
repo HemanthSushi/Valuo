@@ -1,17 +1,34 @@
 import React, { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
-import axios from "axios";
+import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { Lightbulb, TrendingUp } from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import {
+  ArrowRight,
+  Sliders,
+  Info,
+  Zap,
+  Sparkles,
+  Calculator,
+  Target,
+  Layers,
+  Building2,
+  CheckCircle2,
+} from "lucide-react";
+import api from "@/lib/api";
+import { StageFooterNav } from "@/components/PipelineFlowNav";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+} from "recharts";
 
 export default function ExplainabilityPage() {
   const { datasetId } = useParams();
+  const navigate = useNavigate();
   const [modelData, setModelData] = useState(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [explainability, setExplainability] = useState(null);
@@ -19,34 +36,37 @@ export default function ExplainabilityPage() {
   const [loadingExplain, setLoadingExplain] = useState(false);
 
   useEffect(() => {
+    async function loadModels() {
+      try {
+        const response = await api.get(`/models/${datasetId}`);
+        setModelData(response.data);
+        if (response.data.best_model) {
+          setSelectedModel(response.data.best_model);
+        } else if (response.data.models?.length > 0) {
+          setSelectedModel(response.data.models[0].model_name);
+        }
+      } catch (error) {
+        toast.error("Failed to load models for explainability.");
+      } finally {
+        setLoading(false);
+      }
+    }
     loadModels();
   }, [datasetId]);
 
   useEffect(() => {
     if (selectedModel) {
-      loadExplainability();
+      loadExplainability(selectedModel);
     }
   }, [selectedModel]);
 
-  const loadModels = async () => {
-    try {
-      const response = await axios.get(`${API}/models/${datasetId}`);
-      setModelData(response.data);
-      setSelectedModel(response.data.best_model);
-    } catch (error) {
-      toast.error("Failed to load models");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadExplainability = async () => {
+  const loadExplainability = async (modelName) => {
     setLoadingExplain(true);
     try {
-      const response = await axios.get(`${API}/explainability/${datasetId}/${selectedModel}`);
+      const response = await api.get(`/explainability/${datasetId}/${modelName}`);
       setExplainability(response.data);
     } catch (error) {
-      toast.error("Failed to load explainability data");
+      toast.error(`Failed to load explainability data for ${modelName}`);
     } finally {
       setLoadingExplain(false);
     }
@@ -54,136 +74,227 @@ export default function ExplainabilityPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
+      <div className="flex flex-col items-center justify-center h-96 space-y-3">
+        <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent animate-spin rounded-full" />
+        <p className="text-xs font-mono text-muted-foreground">Loading explainability vectors...</p>
       </div>
     );
   }
 
-  if (!modelData) return null;
+  if (!modelData || !modelData.models) {
+    return (
+      <div className="p-10 text-center bg-card border border-border rounded-2xl max-w-md mx-auto space-y-4 shadow-md">
+        <Sparkles className="w-10 h-10 text-indigo-500 mx-auto" />
+        <h2 className="text-base font-bold text-foreground">No Models Available</h2>
+        <p className="text-xs text-muted-foreground">Please train models before inspecting feature attributions.</p>
+        <button
+          onClick={() => navigate(`/train/${datasetId}`)}
+          className="px-5 py-2.5 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-500/25"
+        >
+          Train Models
+        </button>
+      </div>
+    );
+  }
 
   const featureImportanceData = explainability?.feature_importance
     ? explainability.feature_importance.feature_names.map((name, i) => ({
-        feature: name.substring(0, 25),
-        importance: explainability.feature_importance.importances[i],
-      }))
+        feature: name,
+        importance: parseFloat((explainability.feature_importance.importances[i] * 100).toFixed(2)),
+      })).slice(0, 12)
     : [];
 
   const shapData = explainability?.shap_values
     ? explainability.shap_values.feature_names.map((name, i) => ({
-        feature: name.substring(0, 25),
-        shap: explainability.shap_values.mean_shap_values[i],
-      }))
+        feature: name,
+        shap: parseFloat(explainability.shap_values.mean_shap_values[i].toFixed(4)),
+      })).slice(0, 12)
     : [];
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-4xl font-heading font-bold text-foreground mb-2">Model Explainability</h1>
-        <p className="text-muted-foreground">Understand feature importance and SHAP values</p>
+    <div className="space-y-8 text-left max-w-7xl mx-auto">
+      {/* Header Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/80 pb-6">
+        <div>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-pink-500/10 text-pink-600 dark:text-pink-400 text-xs font-semibold mb-2">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Stage 5 • SHAP Insights</span>
+          </div>
+          <h1 className="text-3xl font-heading font-extrabold text-foreground tracking-tight">
+            SHAP Insights & Feature Attribution
+          </h1>
+          <p className="text-xs text-muted-foreground mt-1">
+            Decode how physical dimensions, localities, and features mathematically drive property price estimations.
+          </p>
+        </div>
+
+        {/* Model Switcher & Prediction Action */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 bg-secondary/80 px-3 py-1.5 rounded-xl border border-border">
+            <label htmlFor="explain-model-select" className="text-xs font-bold text-muted-foreground whitespace-nowrap">
+              Algorithm:
+            </label>
+            <select
+              id="explain-model-select"
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="px-2.5 py-1 text-xs font-bold rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              data-testid="model-select"
+            >
+              {modelData.models.map((m) => (
+                <option key={m.model_name} value={m.model_name}>
+                  {m.model_name} {m.model_name === modelData.best_model ? "★ (Best Model)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={() => navigate(`/predict/${datasetId}`)}
+            className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-md shadow-indigo-500/25 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer"
+          >
+            <Calculator className="w-3.5 h-3.5" />
+            <span>Proceed to Valuation Lab</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
-      <Card className="border border-border rounded-none p-6">
-        <h2 className="text-xl font-heading font-bold mb-4">Select Model</h2>
-        <Select value={selectedModel} onValueChange={setSelectedModel}>
-          <SelectTrigger className="w-full max-w-md rounded-none" data-testid="model-select">
-            <SelectValue placeholder="Select model" />
-          </SelectTrigger>
-          <SelectContent>
-            {modelData.models.map((model) => (
-              <SelectItem key={model.model_name} value={model.model_name}>
-                {model.model_name} {model.model_name === modelData.best_model ? "(Best)" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Card>
-
       {loadingExplain ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Computing explainability metrics...</p>
-          </div>
+        <div className="flex flex-col items-center justify-center h-80 space-y-3 bg-card border border-border rounded-2xl shadow-md">
+          <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent animate-spin rounded-full" />
+          <p className="text-xs font-mono text-muted-foreground">
+            Computing TreeExplainer marginal attributions for {selectedModel}...
+          </p>
         </div>
       ) : (
-        <>
-          {featureImportanceData.length > 0 && (
-            <Card className="border border-border rounded-none p-6">
-              <div className="flex items-center space-x-3 mb-4">
-                <TrendingUp className="w-6 h-6 text-primary" />
-                <h2 className="text-xl font-heading font-bold">Feature Importance</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+          {/* Feature Importance Chart */}
+          <div className="bg-card border border-border rounded-2xl p-6 sm:p-8 space-y-4 shadow-md">
+            <div className="flex items-center justify-between border-b border-border/80 pb-4">
+              <div>
+                <h2 className="text-base font-bold text-foreground">Global Feature Importance (%)</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Relative impurity reduction across decision trees in {selectedModel}
+                </p>
               </div>
-              <p className="text-sm text-muted-foreground mb-6">
-                Top 20 features ranked by their importance in the {selectedModel} model
-              </p>
-              <ResponsiveContainer width="100%" height={500}>
-                <BarChart data={featureImportanceData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis type="number" tick={{ fontSize: 12, fontFamily: 'JetBrains Mono' }} />
-                  <YAxis
-                    dataKey="feature"
-                    type="category"
-                    width={200}
-                    tick={{ fontSize: 11, fontFamily: 'JetBrains Mono' }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: 0,
-                    }}
-                  />
-                  <Bar dataKey="importance" fill="hsl(var(--chart-1))" />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          )}
+              <span className="text-xs font-mono font-bold text-indigo-500">MDI Rank</span>
+            </div>
 
-          {shapData.length > 0 && (
-            <Card className="border border-border rounded-none p-6">
-              <div className="flex items-center space-x-3 mb-4">
-                <Lightbulb className="w-6 h-6 text-accent" />
-                <h2 className="text-xl font-heading font-bold">SHAP Values</h2>
+            {featureImportanceData.length > 0 ? (
+              <div className="h-80 w-full pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={featureImportanceData}
+                    layout="vertical"
+                    margin={{ top: 5, right: 30, left: 85, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.15} horizontal={false} />
+                    <XAxis
+                      type="number"
+                      stroke="currentColor"
+                      fontSize={11}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      dataKey="feature"
+                      type="category"
+                      stroke="currentColor"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#DCDCCA",
+                        borderColor: "#88867C",
+                        borderRadius: "12px",
+                        fontSize: "12px",
+                        color: "#222222",
+                      }}
+                      formatter={(val) => [`${val}%`, "Global Weight"]}
+                    />
+                    <Bar
+                      dataKey="importance"
+                      fill="#222222"
+                      radius={[0, 4, 4, 0]}
+                      barSize={16}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-              <p className="text-sm text-muted-foreground mb-6">
-                SHAP (SHapley Additive exPlanations) values show the contribution of each feature to the model predictions
+            ) : (
+              <p className="text-xs text-muted-foreground py-20 text-center">
+                Feature importance is not available for this model type.
               </p>
-              <ResponsiveContainer width="100%" height={500}>
-                <BarChart data={shapData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis type="number" tick={{ fontSize: 12, fontFamily: 'JetBrains Mono' }} />
-                  <YAxis
-                    dataKey="feature"
-                    type="category"
-                    width={200}
-                    tick={{ fontSize: 11, fontFamily: 'JetBrains Mono' }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: 0,
-                    }}
-                  />
-                  <Bar dataKey="shap" fill="hsl(var(--chart-2))" />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          )}
+            )}
+          </div>
 
-          {!featureImportanceData.length && !shapData.length && (
-            <Card className="border border-border rounded-none p-12">
-              <div className="text-center">
-                <p className="text-muted-foreground">No explainability data available for this model</p>
+          {/* SHAP Mean Values Chart */}
+          <div className="bg-card border border-border rounded-2xl p-6 sm:p-8 space-y-4 shadow-md">
+            <div className="flex items-center justify-between border-b border-border/80 pb-4">
+              <div>
+                <h2 className="text-base font-bold text-foreground">Mean |SHAP Value| (Marginal Impact)</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Average magnitude of valuation change attributed by TreeExplainer
+                </p>
               </div>
-            </Card>
-          )}
-        </>
+              <span className="text-xs font-mono font-bold text-[#222222]">XAI Impact</span>
+            </div>
+
+            {shapData.length > 0 ? (
+              <div className="h-80 w-full pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={shapData}
+                    layout="vertical"
+                    margin={{ top: 5, right: 30, left: 85, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.15} horizontal={false} />
+                    <XAxis
+                      type="number"
+                      stroke="currentColor"
+                      fontSize={11}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      dataKey="feature"
+                      type="category"
+                      stroke="currentColor"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#DCDCCA",
+                        borderColor: "#88867C",
+                        borderRadius: "12px",
+                        fontSize: "12px",
+                        color: "#222222",
+                      }}
+                      formatter={(val) => [`${val}`, "Mean |SHAP|"]}
+                    />
+                    <Bar
+                      dataKey="shap"
+                      fill="#88867C"
+                      radius={[0, 4, 4, 0]}
+                      barSize={16}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground py-20 text-center">
+                SHAP explanation values are being calculated or unavailable.
+              </p>
+            )}
+          </div>
+        </div>
       )}
+
+      {/* Workflow Stage Footer Navigator */}
+      <StageFooterNav currentStepId="insights" datasetId={datasetId} />
     </div>
   );
 }

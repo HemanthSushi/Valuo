@@ -1,15 +1,32 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import axios from "axios";
 import { toast } from "sonner";
-import { ArrowRight, Database, AlertCircle, BarChart3, Hash, Type } from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import {
+  ArrowRight,
+  Database,
+  BarChart2,
+  Table,
+  AlertCircle,
+  Check,
+  Building2,
+  Layers,
+  Sparkles,
+  Target,
+  Sliders,
+  CheckCircle2,
+} from "lucide-react";
+import api from "@/lib/api";
+import { StageFooterNav } from "@/components/PipelineFlowNav";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+} from "recharts";
 
 export default function EDAPage() {
   const { datasetId } = useParams();
@@ -20,36 +37,33 @@ export default function EDAPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    async function loadData() {
+      try {
+        const [metaRes, edaRes] = await Promise.all([
+          api.get(`/meta/${datasetId}`),
+          api.get(`/eda/${datasetId}`),
+        ]);
+
+        setMeta(metaRes.data);
+        setEda(edaRes.data);
+
+        if (metaRes.data.suggested_targets && metaRes.data.suggested_targets.length > 0) {
+          setSelectedTarget(metaRes.data.suggested_targets[0]);
+        } else if (metaRes.data.numeric_columns.length > 0) {
+          setSelectedTarget(metaRes.data.numeric_columns[0]);
+        }
+      } catch (error) {
+        toast.error("Failed to load dataset exploratory analysis.");
+      } finally {
+        setLoading(false);
+      }
+    }
     loadData();
   }, [datasetId]);
 
-  const loadData = async () => {
-    try {
-      const [metaRes, edaRes] = await Promise.all([
-        axios.get(`${API}/meta/${datasetId}`),
-        axios.get(`${API}/eda/${datasetId}`),
-      ]);
-
-      setMeta(metaRes.data);
-      setEda(edaRes.data);
-      
-      // Auto-select the first suggested target if available
-      if (metaRes.data.suggested_targets && metaRes.data.suggested_targets.length > 0) {
-        setSelectedTarget(metaRes.data.suggested_targets[0]);
-      } else if (metaRes.data.numeric_columns.length > 0) {
-        setSelectedTarget(metaRes.data.numeric_columns[0]);
-      }
-    } catch (error) {
-      console.error("EDA Load Error:", error);
-      toast.error("Failed to load dataset");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleProceedToTrain = () => {
     if (!selectedTarget) {
-      toast.error("Please select a target column");
+      toast.error("Please select a target variable for regression.");
       return;
     }
     navigate(`/train/${datasetId}?target=${selectedTarget}`);
@@ -57,201 +71,345 @@ export default function EDAPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading dataset...</p>
-        </div>
+      <div className="flex flex-col items-center justify-center h-96 space-y-3">
+        <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent animate-spin rounded-full" />
+        <p className="text-xs font-mono text-muted-foreground">Computing dataset statistics & correlations...</p>
       </div>
     );
   }
 
-  // Safety check: ensure both meta and eda are loaded before rendering
-  if (!meta || !eda) return null;
-
-  // SAFE ACCESS 1: Handle Missing Values safely
-  const missingData = eda.missing_values 
-    ? Object.entries(eda.missing_values)
-        .filter(([_, val]) => val.count > 0)
-        .map(([col, val]) => ({ column: col, count: val.count, percent: val.percent }))
-    : [];
-
-  // SAFE ACCESS 2: Handle Correlations safely
-  let correlationData = [];
-  if (selectedTarget && eda.correlations && eda.correlations[selectedTarget]) {
-      correlationData = Object.entries(eda.correlations[selectedTarget])
-        .filter(([col]) => col !== selectedTarget)
-        .map(([col, corr]) => ({ feature: col.substring(0, 15), correlation: corr }))
-        .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation))
-        .slice(0, 10);
+  if (!meta || !eda) {
+    return (
+      <div className="p-10 text-center bg-card border border-border rounded-2xl max-w-md mx-auto space-y-3">
+        <AlertCircle className="w-10 h-10 text-destructive mx-auto" />
+        <h2 className="text-base font-bold text-foreground">Dataset not found</h2>
+        <p className="text-xs text-muted-foreground mt-1">Unable to locate workspace records for ID: {datasetId}</p>
+      </div>
+    );
   }
 
+  const missingData = eda.missing_values
+    ? Object.entries(eda.missing_values)
+        .filter(([_, val]) => val.count > 0)
+        .map(([col, val]) => ({
+          column: col,
+          count: val.count,
+          percent: val.percent,
+        }))
+        .sort((a, b) => b.count - a.count)
+    : [];
+
+  let correlationData = [];
+  if (selectedTarget && eda.correlations && eda.correlations[selectedTarget]) {
+    correlationData = Object.entries(eda.correlations[selectedTarget])
+      .filter(([col]) => col !== selectedTarget)
+      .map(([col, corr]) => ({
+        feature: col,
+        correlation: corr ? parseFloat(corr.toFixed(4)) : 0,
+      }))
+      .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation))
+      .slice(0, 10);
+  }
+
+  const numericCols = meta.numeric_columns || [];
+  const summaryStats = eda.summary_stats || {};
+
   return (
-    <div className="space-y-6">
-      {/* Header Section */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-8 text-left max-w-7xl mx-auto">
+      {/* Header Banner */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border/80 pb-6">
         <div>
-          <h1 className="text-3xl font-heading font-bold text-foreground">Exploratory Analysis</h1>
-          <p className="text-sm text-muted-foreground">Overview of {meta.rows} rows × {meta.columns} columns</p>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 text-xs font-semibold mb-2">
+            <Database className="w-3.5 h-3.5" />
+            <span>Stage 2 • Data Profiling & Feature Intelligence</span>
+          </div>
+          <h1 className="text-3xl font-heading font-extrabold text-foreground tracking-tight">
+            Data Profiling & Feature Distributions
+          </h1>
+          <p className="text-xs text-muted-foreground mt-1">
+            Analyzing {meta.rows.toLocaleString()} property records across {meta.columns} distinct dimensions.
+          </p>
         </div>
-        <Button
-          onClick={handleProceedToTrain}
-          size="sm"
-          className="rounded-none bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          Proceed to Training
-          <ArrowRight className="w-4 h-4 ml-2" />
-        </Button>
-      </div>
 
-      {/* Target Selection */}
-      <Card className="border border-border rounded-none p-4 bg-muted/20">
-        <div className="flex items-center gap-4">
-          <h2 className="text-sm font-bold whitespace-nowrap">Target Column:</h2>
-          <Select value={selectedTarget} onValueChange={setSelectedTarget}>
-            <SelectTrigger className="w-full max-w-xs h-8 bg-background border-muted-foreground/30 rounded-none text-xs">
-              <SelectValue placeholder="Select target" />
-            </SelectTrigger>
-            <SelectContent>
-              {meta.numeric_columns.map((col) => (
-                <SelectItem key={col} value={col}>
-                  {col} {meta.suggested_targets?.includes(col) ? "(Suggested)" : ""}
-                </SelectItem>
+        {/* Target Selector & Proceed Action */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 bg-secondary/80 px-3 py-1.5 rounded-xl border border-border">
+            <label htmlFor="target-select" className="text-xs font-bold text-muted-foreground whitespace-nowrap">
+              Target (Y):
+            </label>
+            <select
+              id="target-select"
+              value={selectedTarget}
+              onChange={(e) => setSelectedTarget(e.target.value)}
+              className="px-2.5 py-1 text-xs font-bold rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              {numericCols.map((col) => (
+                <option key={col} value={col}>
+                  {col} {meta.suggested_targets.includes(col) ? "★ (Target)" : ""}
+                </option>
               ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </Card>
+            </select>
+          </div>
 
-      {/* UPDATED STATS CARDS:
-         - grid-cols-2 md:grid-cols-4: Forces 2 per row on small screens, 4 on large.
-         - p-4: Reduced padding (was p-6).
-         - h-4 w-4: Smaller icons (was w-8 h-8).
-      */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Card className="border border-border rounded-none p-4 flex flex-col justify-between hover:bg-muted/10 transition-colors">
-          <div className="flex justify-between items-start mb-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Rows</p>
-            <Database className="h-4 w-4 text-primary opacity-70" />
-          </div>
-          <p className="text-2xl font-bold font-mono">{meta.rows?.toLocaleString() || 0}</p>
-        </Card>
-        
-        <Card className="border border-border rounded-none p-4 flex flex-col justify-between hover:bg-muted/10 transition-colors">
-          <div className="flex justify-between items-start mb-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Numeric</p>
-            <Hash className="h-4 w-4 text-green-600 opacity-70" />
-          </div>
-          <p className="text-2xl font-bold font-mono">{meta.numeric_columns?.length || 0}</p>
-        </Card>
-        
-        <Card className="border border-border rounded-none p-4 flex flex-col justify-between hover:bg-muted/10 transition-colors">
-          <div className="flex justify-between items-start mb-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Categorical</p>
-            <Type className="h-4 w-4 text-blue-600 opacity-70" />
-          </div>
-          <p className="text-2xl font-bold font-mono">{meta.categorical_columns?.length || 0}</p>
-        </Card>
-        
-        <Card className="border border-border rounded-none p-4 flex flex-col justify-between hover:bg-muted/10 transition-colors">
-          <div className="flex justify-between items-start mb-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Missing</p>
-            <AlertCircle className={`h-4 w-4 ${missingData.length > 0 ? 'text-destructive' : 'text-muted-foreground'} opacity-70`} />
-          </div>
-          <p className="text-2xl font-bold font-mono">{missingData.length}</p>
-        </Card>
+          <button
+            onClick={handleProceedToTrain}
+            className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-md shadow-indigo-500/25 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer whitespace-nowrap"
+          >
+            <span>Proceed to Model Studio</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Missing Values Chart */}
-        {missingData.length > 0 && (
-          <Card className="border border-border rounded-none p-4">
-            <h2 className="text-sm font-bold mb-4 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-destructive" /> Missing Values Distribution
-            </h2>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={missingData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                <XAxis dataKey="column" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  cursor={{ fill: 'transparent' }}
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    fontSize: '12px'
-                  }}
-                />
-                <Bar dataKey="percent" fill="hsl(var(--destructive))" radius={[4, 4, 0, 0]} barSize={40} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        )}
+      {/* Multi-Colored Feature Breakdown Metric Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-indigo-500/10 via-card to-card border border-indigo-500/30 rounded-2xl p-5 shadow-sm card-hover-effect">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center mb-3">
+            <Building2 className="w-5 h-5" />
+          </div>
+          <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Total Rows</p>
+          <p className="text-3xl font-extrabold text-foreground font-heading mt-0.5 tabular-nums">
+            {meta.rows.toLocaleString()}
+          </p>
+          <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-medium mt-1 block">
+            Residential Records
+          </span>
+        </div>
 
-        {/* Correlations Chart */}
-        {correlationData.length > 0 ? (
-          <Card className={`border border-border rounded-none p-4 ${missingData.length === 0 ? 'col-span-1 lg:col-span-2' : ''}`}>
-            <h2 className="text-sm font-bold mb-4 flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-primary" /> Top Correlations (Target: {selectedTarget})
-            </h2>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={correlationData} layout="vertical" margin={{ top: 5, right: 10, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="hsl(var(--border))" />
-                <XAxis type="number" domain={[-1, 1]} hide />
-                <YAxis dataKey="feature" type="category" width={100} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  cursor={{ fill: 'transparent' }}
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    fontSize: '12px'
-                  }}
-                />
-                <Bar dataKey="correlation" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} barSize={20} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        ) : (
-          <Card className="border border-border rounded-none p-6 flex flex-col items-center justify-center h-[300px] bg-muted/20 col-span-1 lg:col-span-2">
-             <BarChart3 className="w-8 h-8 text-muted-foreground/40 mb-2" />
-             <p className="text-sm text-muted-foreground">No numeric correlations available</p>
-          </Card>
-        )}
+        <div className="bg-gradient-to-br from-cyan-500/10 via-card to-card border border-cyan-500/30 rounded-2xl p-5 shadow-sm card-hover-effect">
+          <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-500 flex items-center justify-center mb-3">
+            <Database className="w-5 h-5" />
+          </div>
+          <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Numeric Features</p>
+          <p className="text-3xl font-extrabold text-cyan-600 dark:text-cyan-400 font-heading mt-0.5 tabular-nums">
+            {meta.numeric_columns.length}
+          </p>
+          <span className="text-[11px] text-muted-foreground font-medium mt-1 block">
+            Continuous & Quantities
+          </span>
+        </div>
+
+        <div className="bg-gradient-to-br from-purple-500/10 via-card to-card border border-purple-500/30 rounded-2xl p-5 shadow-sm card-hover-effect">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-500 flex items-center justify-center mb-3">
+            <Layers className="w-5 h-5" />
+          </div>
+          <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Categorical Features</p>
+          <p className="text-3xl font-extrabold text-purple-600 dark:text-purple-400 font-heading mt-0.5 tabular-nums">
+            {meta.categorical_columns.length}
+          </p>
+          <span className="text-[11px] text-muted-foreground font-medium mt-1 block">
+            Locations & Categories
+          </span>
+        </div>
+
+        <div className="bg-gradient-to-br from-amber-500/10 via-card to-card border border-amber-500/30 rounded-2xl p-5 shadow-sm card-hover-effect">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center mb-3">
+            <AlertCircle className="w-5 h-5" />
+          </div>
+          <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Missing Values</p>
+          <p className="text-3xl font-extrabold text-amber-600 dark:text-amber-400 font-heading mt-0.5 tabular-nums">
+            {missingData.reduce((acc, curr) => acc + curr.count, 0).toLocaleString()}
+          </p>
+          <span className="text-[11px] text-muted-foreground font-medium mt-1 block">
+            Auto-Imputed via Pipeline
+          </span>
+        </div>
+      </div>
+
+      {/* Two Column Section: Correlations and Missingness */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Target Correlations Chart */}
+        <div className="lg:col-span-7 bg-card border border-border rounded-2xl p-6 sm:p-8 space-y-4 shadow-md">
+          <div className="flex items-center justify-between border-b border-border/80 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-foreground">Top Feature Correlations with Target</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Pearson linear correlation with selected target: <span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedTarget}</span>
+              </p>
+            </div>
+            <span className="text-xs font-mono font-semibold text-muted-foreground bg-secondary px-2.5 py-1 rounded-md">
+              |r| Ranking
+            </span>
+          </div>
+
+          {correlationData.length > 0 ? (
+            <div className="h-72 w-full pt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={correlationData}
+                  layout="vertical"
+                  margin={{ top: 5, right: 20, left: 75, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.15} horizontal={false} />
+                  <XAxis
+                    type="number"
+                    domain={[-1, 1]}
+                    stroke="currentColor"
+                    fontSize={11}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    dataKey="feature"
+                    type="category"
+                    stroke="currentColor"
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#DCDCCA",
+                      borderColor: "#88867C",
+                      borderRadius: "12px",
+                      fontSize: "12px",
+                      color: "#222222",
+                    }}
+                    formatter={(val) => [`${val}`, "Pearson Correlation"]}
+                  />
+                  <Bar
+                    dataKey="correlation"
+                    radius={[0, 4, 4, 0]}
+                    barSize={16}
+                  >
+                    {correlationData.map((entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={entry.correlation >= 0 ? "#222222" : "#88867C"}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground py-16 text-center">
+              Insufficient numeric pairs to compute correlation matrix.
+            </p>
+          )}
+        </div>
+
+        {/* Missing Values Table with Progress Bars */}
+        <div className="lg:col-span-5 bg-card border border-border rounded-2xl p-6 sm:p-8 space-y-4 shadow-md">
+          <div className="flex items-center justify-between border-b border-border/80 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-foreground">Missing Values Profile</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Handled via automated median & mode imputation
+              </p>
+            </div>
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              {missingData.length} columns affected
+            </span>
+          </div>
+
+          {missingData.length > 0 ? (
+            <div className="overflow-x-auto max-h-72">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border/80 text-muted-foreground text-[11px] font-bold uppercase tracking-wider">
+                    <th className="py-2.5 text-left font-bold">Feature</th>
+                    <th className="py-2.5 text-right font-bold">Count</th>
+                    <th className="py-2.5 text-right font-bold">% Missing</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {missingData.map((item) => (
+                    <tr key={item.column} className="hover:bg-secondary/40 transition-colors">
+                      <td className="py-2.5 font-bold text-foreground">{item.column}</td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {item.count.toLocaleString()}
+                      </td>
+                      <td className="py-2.5 text-right tabular-nums">
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold font-mono text-[11px]">
+                          {item.percent}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="py-16 text-center text-xs text-muted-foreground space-y-2">
+              <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
+              <p className="font-bold text-foreground">Zero Missing Values Detected</p>
+              <p>Dataset is completely dense across all observed rows.</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Summary Statistics Table */}
-      {eda.summary_stats && Object.keys(eda.summary_stats).length > 0 && (
-        <Card className="border border-border rounded-none p-4">
-          <h2 className="text-sm font-bold mb-4">Summary Statistics</h2>
+      {numericCols.length > 0 && Object.keys(summaryStats).length > 0 && (
+        <div className="bg-card border border-border rounded-2xl p-6 sm:p-8 space-y-4 shadow-md">
+          <div className="flex items-center justify-between border-b border-border/80 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-foreground">Descriptive Numeric Statistics</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Central tendencies, dispersion, and quartiles for continuous features
+              </p>
+            </div>
+            <span className="text-xs font-mono text-muted-foreground bg-secondary px-2.5 py-1 rounded-md font-semibold">
+              Standard 5-Number Summary
+            </span>
+          </div>
+
           <div className="overflow-x-auto">
-            <table className="w-full text-xs font-mono border-collapse">
+            <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left p-2 font-bold text-muted-foreground">STAT</th>
-                  {Object.keys(eda.summary_stats).slice(0, 8).map((col) => (
-                    <th key={col} className="text-right p-2 font-bold text-foreground">{col.substring(0, 12)}</th>
-                  ))}
+                <tr className="border-b border-border/80 text-muted-foreground text-[11px] font-bold uppercase tracking-wider">
+                  <th className="py-3 text-left font-bold">Feature</th>
+                  <th className="py-3 text-right font-bold">Count</th>
+                  <th className="py-3 text-right font-bold">Mean</th>
+                  <th className="py-3 text-right font-bold">Std Dev</th>
+                  <th className="py-3 text-right font-bold">Min</th>
+                  <th className="py-3 text-right font-bold">25%</th>
+                  <th className="py-3 text-right font-bold">Median (50%)</th>
+                  <th className="py-3 text-right font-bold">75%</th>
+                  <th className="py-3 text-right font-bold">Max</th>
                 </tr>
               </thead>
-              <tbody>
-                {['mean', 'std', 'min', '50%', 'max'].map((stat) => (
-                  <tr key={stat} className="border-b border-border/50 hover:bg-muted/50 transition-colors">
-                    <td className="p-2 font-semibold text-muted-foreground uppercase">{stat}</td>
-                    {Object.keys(eda.summary_stats).slice(0, 8).map((col) => (
-                      <td key={col} className="text-right p-2">
-                        {eda.summary_stats[col][stat] !== undefined && eda.summary_stats[col][stat] !== null 
-                            ? eda.summary_stats[col][stat].toFixed(1) 
-                            : '-'}
+              <tbody className="divide-y divide-border/60">
+                {numericCols.map((col) => {
+                  const stat = summaryStats[col] || {};
+                  return (
+                    <tr key={col} className="hover:bg-secondary/40 transition-colors">
+                      <td className="py-2.5 font-bold text-foreground">{col}</td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat.count ? Number(stat.count).toLocaleString() : "-"}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat.mean !== undefined && stat.mean !== null ? Number(stat.mean).toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat.std !== undefined && stat.std !== null ? Number(stat.std).toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat.min !== undefined && stat.min !== null ? Number(stat.min).toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat["25%"] !== undefined && stat["25%"] !== null ? Number(stat["25%"]).toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-indigo-600 dark:text-indigo-400 font-bold tabular-nums">
+                        {stat["50%"] !== undefined && stat["50%"] !== null ? Number(stat["50%"]).toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat["75%"] !== undefined && stat["75%"] !== null ? Number(stat["75%"]).toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {stat.max !== undefined && stat.max !== null ? Number(stat.max).toFixed(2) : "-"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        </Card>
+        </div>
       )}
+
+      {/* Workflow Stage Footer Navigator */}
+      <StageFooterNav currentStepId="profiling" datasetId={datasetId} />
     </div>
   );
 }

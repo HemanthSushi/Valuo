@@ -1,142 +1,69 @@
 {
   "identity": {
-    "persona": "E1: The Anti-AI Designer",
-    "philosophy": "Fusion over Imitation. Emotion First. Content is King.",
+    "product_name": "Valuo",
+    "persona": "Editorial Real Estate & Machine Learning Intelligence",
+    "philosophy": "Precision, Quiet Authority, Empirical Data First.",
     "anti_patterns": [
-      "Purple/Teal gradients",
-      "Inter font everywhere",
-      "Centered layouts",
-      "Generic 'SaaS Blue'",
-      "Transparent backgrounds without blur"
+      "Gradient text",
+      "Glassmorphism or backdrop blur",
+      "Glowing or colored soft shadows",
+      "Emojis in the UI",
+      "Sparkle or wand icons",
+      "Pill-shaped buttons",
+      "Nested cards",
+      "Centered-everything layouts",
+      "Generic marketing fluff ('Unlock the power of...')",
+      "Three-icon floating grids",
+      "Purple or blue gradients"
     ]
   },
   "design_system": {
-    "theme": "Smart Concrete",
-    "description": "A fusion of Swiss High-Contrast Authority and Organic Earthy tones. Think 'Architectural Blueprint meets High-End Real Estate'.",
+    "theme": "Editorial Minimalist",
+    "description": "High-contrast editorial typography, 1px hairline borders, and restrained terracotta accent for model benchmarking.",
     "colors": {
-      "primary": "#0f392b",
-      "primary_foreground": "#ffffff",
-      "secondary": "#e8f5e9",
-      "secondary_foreground": "#0f392b",
-      "accent": "#a3e635",
-      "accent_foreground": "#0f392b",
-      "background": "#f8fafc",
-      "foreground": "#0f172a",
-      "muted": "#f1f5f9",
-      "muted_foreground": "#64748b",
-      "border": "#e2e8f0",
-      "input": "#e2e8f0",
-      "ring": "#0f392b",
-      "chart_1": "#0f392b",
-      "chart_2": "#a3e635",
-      "chart_3": "#166534",
-      "chart_4": "#86efac",
-      "chart_5": "#14532d"
+      "primary": "#1C1917",
+      "primary_foreground": "#FAFAF9",
+      "secondary": "#F0EFEB",
+      "secondary_foreground": "#1C1917",
+      "accent": "#C25E3E",
+      "accent_foreground": "#FFFFFF",
+      "background": "#FAFAF9",
+      "foreground": "#1C1917",
+      "muted": "#F0EFEB",
+      "muted_foreground": "#78716C",
+      "border": "#E7E5E4",
+      "input": "#E7E5E4",
+      "ring": "#C25E3E",
+      "chart_1": "#C25E3E",
+      "chart_2": "#3F3F46",
+      "chart_3": "#71717A",
+      "chart_4": "#A1A1AA",
+      "chart_5": "#D4D4D8"
     },
     "typography": {
       "headings": {
-        "family": "Outfit, sans-serif",
-        "weights": ["300", "500", "700"],
-        "usage": "Use for all H1-H6. Tight tracking (-0.02em)."
+        "family": "IBM Plex Sans, sans-serif",
+        "weights": ["500", "600"],
+        "usage": "H1-H6 headers, tight letter spacing (-0.02em)."
       },
       "body": {
-        "family": "DM Sans, sans-serif",
+        "family": "IBM Plex Sans, sans-serif",
         "weights": ["400", "500"],
-        "usage": "Use for paragraphs and UI text. Relaxed leading."
+        "usage": "Data labels, body copy, form inputs."
       },
       "mono": {
         "family": "JetBrains Mono, monospace",
-        "usage": "Use for data values, code blocks, and technical labels."
+        "usage": "Prices, tabular metrics, RMSE, MAE, R², dataset IDs."
       }
     },
-    "spacing": {
-      "scale": "Generous. Use p-6, p-8, p-12 where others use p-4.",
-      "rule": "Containers with borders MUST have internal padding (p-6+) to prevent text collision."
+    "shape": {
+      "radius": "5px",
+      "border": "1px solid #E7E5E4",
+      "shadow": "none"
     },
-    "radius": {
-      "default": "0.125rem",
-      "buttons": "0px",
-      "cards": "0px"
-    },
-    "shadows": {
-      "card": "none",
-      "hover": "0 4px 20px -2px rgba(15, 57, 43, 0.1)"
+    "machine_learning_core": {
+      "models": ["RandomForest", "XGBoost"],
+      "banned_models": ["LinearRegression", "LightGBM"]
     }
-  },
-  "layout_strategies": {
-    "home_page": {
-      "grid_mode": "Tetris Grid",
-      "structure": "grid-cols-1 md:grid-cols-12 gap-8",
-      "rules": [
-        "Hero section must span col-span-full md:col-span-8",
-        "Use asymmetry. Never center the main value prop perfectly.",
-        "Use negative space (empty grid cells) to create breathing room."
-      ]
-    },
-    "dashboard_pages": {
-      "grid_mode": "Control Room Grid",
-      "structure": "grid-cols-1 md:grid-cols-4 gap-4",
-      "rules": [
-        "Dense layout. Every pixel utilized.",
-        "Use h-full on children to ensure equal height columns.",
-        "No jagged bottoms."
-      ]
-    }
-  },
-  "components": {
-    "buttons": {
-      "style": "Sharp edges (rounded-none) or pill (rounded-full). High contrast.",
-      "hover": "Transform: translate(-2px, -2px) with solid shadow offset.",
-      "primary": "bg-primary text-primary-foreground hover:bg-primary/90",
-      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-    },
-    "cards": {
-      "style": "Grid Borders. 1px solid border-border. No shadow by default.",
-      "header": "Must have distinct border-b border-border/50.",
-      "hover": "Border color darkens to border-primary/50."
-    },
-    "inputs": {
-      "style": "Flat, 1px border. bg-background.",
-      "focus": "Ring-2 ring-primary ring-offset-2"
-    },
-    "navigation": {
-      "style": "Glassmorphism (Crystal).",
-      "classes": "bg-white/80 backdrop-blur-xl border-b border-white/20"
-    }
-  },
-  "assets": {
-    "images": [
-      {
-        "category": "hero_background",
-        "url": "https://images.unsplash.com/photo-1549791084-5f78368b208b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBjb25jcmV0ZSUyMGhvdXNlJTIwYXJjaGl0ZWN0dXJlfGVufDB8fHx8MTc2NDU3OTQ0Mnww&ixlib=rb-4.1.0&q=85",
-        "description": "Modern concrete architecture, linear, layered. Use for Home Page Hero."
-      },
-      {
-        "category": "abstract_data",
-        "url": "https://images.unsplash.com/photo-1762279389020-eeeb69c25813?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGRhdGElMjB2aXN1YWxpemF0aW9uJTIwZ3JlZW58ZW58MHx8fHwxNzY0NTc5NDQ1fDA&ixlib=rb-4.1.0&q=85",
-        "description": "Abstract glowing green data lines. Use for Train/Predict page backgrounds or overlays."
-      }
-    ],
-    "icons": "Use lucide-react. Stroke width 1.5px for elegance."
-  },
-  "universal_guidelines": [
-    "DO NOT use generic 'AI slop' designs.",
-    "DO NOT use transparent backgrounds without backdrop-blur.",
-    "DO NOT use gradients for text unless specifically requested.",
-    "ALWAYS add data-testid attributes to interactive elements (kebab-case).",
-    "ALWAYS use 'sonner' for toasts.",
-    "ALWAYS use named exports for components and default exports for pages.",
-    "Ensure contrast ratios meet APCA standards.",
-    "Use 'Outfit' font for headings and 'DM Sans' for body.",
-    "Use 'JetBrains Mono' for all data tables and code.",
-    "Primary color is Deep Forest Green (#0f392b), Accent is Lime (#a3e635)."
-  ],
-  "tech_stack": {
-    "framework": "React",
-    "styling": "Tailwind CSS",
-    "ui_library": "Shadcn/UI",
-    "charts": "Recharts",
-    "icons": "lucide-react"
-  },
-  "instructions_to_main_agent": "1. Update tailwind.config.js with the provided color palette and fonts. 2. Install 'sonner' for toasts. 3. Create a layout wrapper that implements the 'Crystal Glass' navigation. 4. Build the Home page using the 'Tetris Grid' strategy. 5. Build the Dashboard pages using the 'Control Room Grid' strategy."
+  }
 }

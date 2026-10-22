@@ -1,1 +1,26 @@
-{"models": [{"model_name": "LinearRegression", "rmse": 123.46018996945679, "mae": 50.889252413230146, "r2": 0.2840754691459775, "mape": 0.48474231359243364, "train_time": 0.020366668701171875, "cv_rmse": null}, {"model_name": "RandomForest", "rmse": 128.86769309190248, "mae": 50.193642807904055, "r2": 0.21998766598427577, "mape": 0.46464996386259094, "train_time": 0.17007112503051758, "cv_rmse": null}, {"model_name": "XGBoost", "rmse": 139.2457420289136, "mae": 51.08465650661572, "r2": 0.08929607255847949, "mape": 0.4670159957378275, "train_time": 0.1612246036529541, "cv_rmse": null}, {"model_name": "LightGBM", "rmse": 123.02923114354884, "mae": 49.58055605694453, "r2": 0.28906485884472044, "mape": 0.47292406118711133, "train_time": 0.09003496170043945, "cv_rmse": null}], "best_model": "LightGBM", "target_column": "price", "test_size": 0.2, "random_state": 42}
+{
+  "models": [
+    {
+      "model_name": "RandomForest",
+      "rmse": 80.63847580074868,
+      "mae": 27.867069904749968,
+      "r2": 0.658827761215466,
+      "mape": 0.22743879885072643,
+      "train_time": 0.8177013397216797,
+      "cv_rmse": null
+    },
+    {
+      "model_name": "XGBoost",
+      "rmse": 75.39151254328499,
+      "mae": 27.873685083349887,
+      "r2": 0.7017819146181588,
+      "mape": 0.23032973991572764,
+      "train_time": 0.5257563591003418,
+      "cv_rmse": null
+    }
+  ],
+  "best_model": "XGBoost",
+  "target_column": "price",
+  "test_size": 0.2,
+  "random_state": 42
+}
