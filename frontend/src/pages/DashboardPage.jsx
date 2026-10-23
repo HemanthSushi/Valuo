@@ -63,9 +63,9 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="h-full w-full max-w-7xl mx-auto flex flex-col justify-between overflow-hidden select-none">
-      {/* Outer Dashboard Frame (Strict Single Page, Zero Scrolling) */}
-      <div className="bg-[#DCDCCA] rounded-2xl sm:rounded-3xl border border-[#88867C]/50 shadow-xl p-3 sm:p-5 flex-1 flex flex-col justify-between overflow-hidden">
+    <div className="min-h-full w-full max-w-7xl mx-auto flex flex-col justify-between select-none">
+      {/* Outer Dashboard Frame (Fluid & Responsive on all Screen Resolutions) */}
+      <div className="bg-[#DCDCCA] rounded-2xl sm:rounded-3xl border border-[#88867C]/50 shadow-xl p-3 sm:p-5 flex-1 flex flex-col justify-between">
         
         {/* Top Header Utilities Bar */}
         <div className="flex items-center justify-between pb-2.5 border-b border-[#88867C]/30 flex-shrink-0">
@@ -159,10 +159,10 @@ export default function DashboardPage() {
         </div>
 
         {/* Main Dashboard Grid: Center Stage + Right Metric Rail */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-stretch flex-1 overflow-hidden pt-2.5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-stretch flex-1 pt-2.5">
           
           {/* Center Stage: Projects & Dataset Overview + Center Building + Bottom 3 Stats */}
-          <div className="lg:col-span-7 flex flex-col justify-between overflow-hidden px-1 sm:px-2">
+          <div className="lg:col-span-7 flex flex-col justify-between px-1 sm:px-2">
             
             {/* Title Section */}
             <div className="text-center">
@@ -256,7 +256,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Right Rail: 4 Stacked Metric Panels (Dataset Features & Price Variation) */}
-          <div className="lg:col-span-5 flex flex-col justify-between gap-2.5 overflow-hidden">
+          <div className="lg:col-span-5 flex flex-col justify-between gap-2.5">
             
             {/* Card 1: Price Variation Dynamics (Lead Velocity Style Equalizer) */}
             <div className="bg-[#C4C0AC]/50 rounded-xl p-3 border border-[#88867C]/40 shadow-xs relative">

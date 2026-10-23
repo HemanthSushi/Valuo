@@ -69,7 +69,7 @@ Valuo employs a bespoke, warm editorial minimalist design language tailored for 
   - Deep High-Contrast Typography & Accents: Obsidian Carbon (`#222222`)
 - **Micro-Interactions**: Hairline borders (`border-stone-200`), rounded geometries (`rounded-xl`), smooth transitions (150ms), and contextual badges.
 - **Typography**: Clean humanist typography paired with monospace tabular numerals (`font-mono tabular-nums`) for currency and metrics.
-- **View Navigation**: Zero-scroll locked viewports for Home and Dashboard, with smooth continuous scrolling for the Predict page.
+- **Responsive Viewport Navigation**: Fluid, responsive canvas layout across all application routes using `min-h-screen` and `overflow-y-auto`. Content adapts seamlessly without clipping across laptops (1366×768 or 1080p with 125% OS scaling), tablets, and mobile displays.
 
 ---
 
@@ -91,11 +91,13 @@ flowchart TD
         AuthRouter["/api/auth (JWT, Bcrypt)"]
         DataRouter["/api/upload, /api/meta, /api/eda"]
         SyncEngine["/api/dataset/sync-internet"]
-        PipelineEngine["pipeline.py (ValuoPreprocessor & ValuoRateRegressor)"]
-        TrainRouter["/api/train (RF & XGBoost)"]
+        TaskManager["task_manager.py (Async Worker Queue)"]
+        SecurityLayer["security.py (HMAC-SHA256 Signatures)"]
+        PipelineEngine["pipeline.py (ValuoPreprocessor & ValuoLogRegressor)"]
+        TrainRouter["/api/train & /api/train/async (RF & XGBoost)"]
         InferenceRouter["/api/predict & /api/predict/random"]
         XAIRouter["/api/explainability (SHAP & Importance)"]
-        ARIMARouter["/api/forecast (ARIMA Time Series)"]
+        ARIMARouter["/api/forecast (ARIMA Time Series + ADF Test)"]
     end
 
     subgraph Storage ["Persistent Storage Engine"]
@@ -116,10 +118,13 @@ flowchart TD
     Axios --> XAIRouter
     Axios --> ARIMARouter
     AuthRouter <--> SQLiteDB
-    TrainRouter --> PipelineEngine
+    TrainRouter --> TaskManager
+    TaskManager --> PipelineEngine
+    PipelineEngine --> SecurityLayer
+    SecurityLayer <--> WorkspaceFS
+    InferenceRouter --> SecurityLayer
     InferenceRouter --> PipelineEngine
-    PipelineEngine <--> WorkspaceFS
-    XAIRouter <--> WorkspaceFS
+    XAIRouter --> SecurityLayer
     InferenceRouter --> SQLiteDB
 ```
 
@@ -140,8 +145,9 @@ flowchart TD
 - **Data Engineering**: [Pandas 2.2+](https://pandas.pydata.org/), [NumPy 2.0+](https://numpy.org/)
 - **Machine Learning Core**: [Scikit-Learn 1.6+](https://scikit-learn.org/), [XGBoost 2.1+](https://xgboost.readthedocs.io/)
 - **Interpretability**: [SHAP](https://shap.readthedocs.io/) (`TreeExplainer`)
-- **Forecasting**: [Statsmodels](https://www.statsmodels.org/) (`ARIMA`)
-- **Security & Sessions**: [PyJWT](https://pyjwt.readthedocs.io/), [bcrypt](https://pypi.org/project/bcrypt/)
+- **Forecasting**: [Statsmodels](https://www.statsmodels.org/) (`ARIMA` + `adfuller`)
+- **Security & Sessions**: [PyJWT](https://pyjwt.readthedocs.io/), [bcrypt](https://pypi.org/project/bcrypt/), HMAC-SHA256 signature verification
+- **Task Management**: In-process `ThreadPoolExecutor` worker queue for long-running ML training
 - **Database Engine**: [SQLite](https://www.sqlite.org/) (Embedded, zero-daemon, WAL mode, high concurrency)
 
 ---
@@ -151,38 +157,38 @@ flowchart TD
 ```
 Valuo/
 ├── backend/
+│   ├── workspace/                   # Model binaries (.pkl), signatures (.pkl.sig) & valuo.db
+│   │   └── 06390047-ef89-4508-b930-6fc7a47f5e05/  # Default benchmark workspace
+│   ├── __init__.py                  # Python package initializer
 │   ├── .env                         # Backend environment variables (JWT secrets, CORS)
+│   ├── .env.example                 # Environment configuration template
 │   ├── database.py                  # Embedded SQLite database engine (WAL mode)
-│   ├── pipeline.py                  # Advanced ML Preprocessor & ValuoRateRegressor
+│   ├── pipeline.py                  # Advanced ML Preprocessor & ValuoLogRegressor
 │   ├── requirements.txt             # Python dependencies
+│   ├── security.py                  # HMAC-SHA256 artifact signing & safe deserialization
 │   ├── server.py                    # FastAPI application, routing & ML endpoints
-│   └── workspace/                   # Model binaries, preprocessor.pkl, & valuo.db
-│       └── 06390047-ef89-4508-b930-6fc7a47f5e05/  # Default benchmark workspace
+│   └── task_manager.py              # Thread-pool async task queue & status polling engine
 ├── frontend/
-│   ├── .env                         # Frontend environment configuration
-│   ├── package.json                 # NPM scripts & dependencies
-│   ├── tailwind.config.js           # Design tokens, palette & fonts
+│   ├── plugins/                     # Webpack & craco plugin utilities
 │   ├── public/
 │   │   ├── images/                  # Real architectural preset photography
 │   │   └── index.html
-│   └── src/
-│       ├── components/              # Layout, UserMenu, ProtectedRoute, Nav
-│       ├── context/                 # AuthContext (JWT authentication session)
-│       ├── lib/                     # Axios instance & API client (api.js)
-│       ├── pages/                   # Application views:
-│       │   ├── HomePage.jsx         # Hero landing view
-│       │   ├── DashboardPage.jsx    # Enterprise valuation analytics hub
-│       │   ├── EDAPage.jsx          # Exploratory Data Analysis profiling
-│       │   ├── TrainPage.jsx        # Model configuration & training
-│       │   ├── ComparePage.jsx      # Leaderboard comparison
-│       │   ├── ExplainabilityPage.jsx # SHAP vectors & feature weights
-│       │   ├── PredictPage.jsx      # Scrollable interactive valuation suite
-│       │   ├── ForecastPage.jsx     # ARIMA time-series projections
-│       │   └── auth/                # LoginPage.jsx & SignupPage.jsx
-│       └── index.css                # Architectural styling & typography
-├── backend_test.py                  # Automated 16-test backend verification suite
-├── upgrade_dataset_and_models.py    # Script to sync internet dataset & train 90%+ models
-└── README.md                        # Master project documentation
+│   ├── src/
+│   │   ├── components/              # Layout, UserMenu, ProtectedRoute, Nav
+│   │   ├── context/                 # AuthContext (JWT authentication session)
+│   │   ├── lib/                     # Axios instance & API client (api.js)
+│   │   ├── pages/                   # Application views (Home, Dashboard, Predict, EDA, Train, Compare, Explain, Forecast, Auth)
+│   │   ├── App.js                   # Application routes & layout wrapper
+│   │   └── index.css                # Architectural styling & typography
+│   ├── .env                         # Frontend environment configuration
+│   ├── craco.config.js              # Craco configuration
+│   ├── package.json                 # NPM scripts & dependencies
+│   └── tailwind.config.js           # Design tokens, palette & fonts
+├── .gitignore                       # Git ignore rules
+├── pyproject.toml                   # Root package definition (PEP 517/518/621)
+├── README.md                        # Master project documentation
+├── REQUIREMENTS.md                  # Software requirements specification
+└── upgrade_dataset_and_models.py    # Script to sync internet dataset & train 90%+ models
 ```
 
 ---
@@ -267,7 +273,7 @@ The `/predict` suite features 5 curated architectural presets calibrated against
    pip install -r requirements.txt
    ```
 
-4. Configure environment variables (copy from template and generate a secret key):
+4. Configure environment variables (copy from template and generate secret keys):
    ```bash
    # Create your local .env from the template
    cp .env.example .env
@@ -281,6 +287,7 @@ The `/predict` suite features 5 curated architectural presets calibrated against
    CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
    JWT_SECRET=<your_cryptographically_generated_secret_key>
    JWT_EXPIRES_MINUTES=1440
+   ARTIFACT_SIGNING_KEY=<optional_dedicated_hmac_signing_key>
    ```
 
 5. (Optional) Run dataset ingestion and model upgrade:
@@ -290,7 +297,12 @@ The `/predict` suite features 5 curated architectural presets calibrated against
 
 6. Start the FastAPI development server:
    ```bash
-   python -m uvicorn server:app --host 127.0.0.1 --port 8000 --reload
+   # From the repository root (standard command):
+   uvicorn backend.server:app --host 127.0.0.1 --port 8000 --reload
+
+   # Or from the backend/ directory:
+   cd backend
+   uvicorn server:app --host 127.0.0.1 --port 8000 --reload
    ```
    Interactive Swagger documentation is available at `http://127.0.0.1:8000/docs`.
 
@@ -337,51 +349,34 @@ The `/predict` suite features 5 curated architectural presets calibrated against
 | `POST` | `/api/dataset/sync-internet/{dataset_id}` | Fetch fresh canonical benchmark dataset from internet repository |
 | `GET` | `/api/meta/{dataset_id}` | Inspect detected column types, unique values, and target suggestions |
 | `GET` | `/api/eda/{dataset_id}` | Compute descriptive statistics, missingness, and correlation matrices |
-| `POST` | `/api/train` | Train dual regression engines (`RandomForest`, `XGBoost`) |
+| `POST` | `/api/train` | Synchronous ML training for fast benchmark runs |
+| `POST` | `/api/train/async` | Non-blocking training dispatch offloaded to worker thread pool |
+| `GET` | `/api/train/status/{task_id}` | Poll real-time training progress, status, and execution logs |
 | `GET` | `/api/models/{dataset_id}` | Retrieve model performance leaderboard (RMSE, MAE, R², MAPE) |
 | `POST` | `/api/predict` | Calculate instant property valuation using active model engine |
 | `GET` | `/api/predict/random/{dataset_id}/{model_name}` | Evaluate random hold-out test row against actual ground truth price |
 | `GET` | `/api/explainability/{dataset_id}/{model_name}` | Compute SHAP attribution values and feature importances |
 | `GET` | `/api/predictions/{dataset_id}` | Query historical persisted predictions and evaluation logs |
-| `POST` | `/api/forecast` | Generate ARIMA time-series projections with 95% confidence intervals |
+| `POST` | `/api/forecast` | Generate ARIMA time-series projections with ADF stationarity validation |
 
 ---
 
-## Verification & Automated Test Suite
+## Enterprise Security & Reliability Guardrails
 
-Valuo includes a standalone end-to-end integration test suite ([`backend_test.py`](backend_test.py)) validating the entire application lifecycle.
+1. **Non-blocking ML Worker Pool**:
+   - Heavy training tasks are dispatched asynchronously via `task_manager.py` using a thread pool. The single-threaded asyncio event loop remains responsive with sub-second health checks even during intensive model fitting.
 
-Run the test suite:
-```bash
-python backend_test.py
-```
+2. **Cryptographic Artifact Signing (Anti-RCE)**:
+   - Eliminates arbitrary code execution from untrusted model deserialization. Every `.pkl` artifact is accompanied by a streaming HMAC-SHA256 signature (`.pkl.sig`). `joblib.load` strictly validates the cryptographic digest before executing deserialization.
 
-### Verified Test Suite Results (100% Pass Rate)
+3. **Strict Path Traversal Protection**:
+   - All `dataset_id` path and body parameters are validated against canonical UUID v4 patterns and verified to reside inside `WORKSPACE_DIR.resolve()`, preventing directory traversal attempts.
 
-```
-============================================================
-VALUO API TEST RESULTS SUMMARY
-============================================================
-[PASS] Root API Status (GET /)
-[PASS] SQLite Storage Stats (GET /api/db/stats)
-[PASS] User Signup (POST /api/auth/signup)
-[PASS] Current User Profile (GET /api/auth/me)
-[PASS] User Login (POST /api/auth/login)
-[PASS] Upload Housing Dataset (POST /api/upload)
-[PASS] Dataset Metadata (GET /api/meta/{id})
-[PASS] Dataset EDA Profiling (GET /api/eda/{id})
-[PASS] List Datasets in Database (GET /api/datasets)
-[PASS] Train Models (RF & XGBoost) (POST /api/train)
-[PASS] Get Model Leaderboard (GET /api/models/{id})
-[PASS] Explainability (SHAP & Importance) (GET /api/explainability/{id}/RandomForest)
-[PASS] Calculate Price Prediction (POST /api/predict)
-[PASS] Random Test Row Evaluation (GET /api/predict/random/{id}/RandomForest)
-[PASS] Query Persisted Predictions (GET /api/predictions/{id})
-[PASS] User Logout (POST /api/auth/logout)
-============================================================
-Total: 16 | Passed: 16 | Failed: 0 | Rate: 100.0%
-============================================================
-```
+4. **Empirical Uncertainty Estimation**:
+   - Replaces arbitrary multiplier bands with real statistical confidence intervals derived from Random Forest individual tree estimator variance and calibrated hold-out test residuals.
+
+5. **Stationarity-Checked Time Series**:
+   - Cross-sectional listing datasets without meaningful timestamps are automatically rejected from time-series forecasting. Temporal datasets undergo Augmented Dickey-Fuller (`adfuller`) unit root testing and AIC order search before fitting.
 
 ---
 

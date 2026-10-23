@@ -10,6 +10,11 @@ import SignupPage from "@/pages/auth/SignupPage";
 import HomePage from "@/pages/HomePage";
 import DashboardPage from "@/pages/DashboardPage";
 import PredictPage from "@/pages/PredictPage";
+import EDAPage from "@/pages/EDAPage";
+import TrainPage from "@/pages/TrainPage";
+import ComparePage from "@/pages/ComparePage";
+import ExplainabilityPage from "@/pages/ExplainabilityPage";
+import ForecastPage from "@/pages/ForecastPage";
 
 import "./App.css";
 
@@ -25,7 +30,7 @@ export default function App() {
           {/* Root Redirect */}
           <Route path="/" element={<Navigate to="/login" replace />} />
 
-          {/* Protected Application Workspace: Exactly 3 Core Pages */}
+          {/* Protected Application Workspace: Responsive Canvas via Layout */}
           <Route
             element={
               <ProtectedRoute>
@@ -33,23 +38,19 @@ export default function App() {
               </ProtectedRoute>
             }
           >
-            {/* 1. Home Page */}
+            {/* Core Application Pages */}
             <Route path="/home" element={<HomePage />} />
-
-            {/* 2. Dashboard Page */}
             <Route path="/dashboard" element={<DashboardPage />} />
-
-            {/* 3. Prediction Page */}
             <Route path="/predict" element={<PredictPage />} />
             <Route path="/predict/:datasetId" element={<PredictPage />} />
 
-            {/* Legacy redirect fallbacks to 3 core pages */}
+            {/* ML Studio & Feature Intelligence Workspaces */}
+            <Route path="/eda/:datasetId?" element={<EDAPage />} />
+            <Route path="/train/:datasetId?" element={<TrainPage />} />
+            <Route path="/compare/:datasetId?" element={<ComparePage />} />
+            <Route path="/explainability/:datasetId?" element={<ExplainabilityPage />} />
+            <Route path="/forecast/:datasetId?" element={<ForecastPage />} />
             <Route path="/data" element={<Navigate to="/home" replace />} />
-            <Route path="/eda/:datasetId?" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/train/:datasetId?" element={<Navigate to="/predict" replace />} />
-            <Route path="/compare/:datasetId?" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/explainability/:datasetId?" element={<Navigate to="/predict" replace />} />
-            <Route path="/forecast/:datasetId?" element={<Navigate to="/dashboard" replace />} />
           </Route>
 
           {/* Fallback to Home */}

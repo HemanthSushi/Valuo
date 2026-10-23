@@ -14,7 +14,10 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Callable, Tuple
 import pandas as pd
 
-import database
+try:
+    from backend import database
+except ImportError:
+    import database
 
 logger = logging.getLogger("valuo-task-manager")
 

@@ -7,19 +7,11 @@ export default function Layout() {
   const isPredict = location.pathname.startsWith("/predict");
 
   return (
-    <div
-      className={`w-screen bg-[#C4C0AC] text-[#222222] flex flex-col font-sans selection:bg-[#222222]/20 selection:text-[#222222] relative ${
-        isPredict ? "min-h-screen overflow-y-auto" : "h-screen max-h-screen overflow-hidden"
-      }`}
-    >
-      {/* Main Page Canvas: Scrollable on Predict, full height locked on Home & Dashboard */}
+    <div className="w-full min-h-screen bg-[#C4C0AC] text-[#222222] flex flex-col font-sans selection:bg-[#222222]/20 selection:text-[#222222] relative overflow-y-auto">
+      {/* Main Page Canvas: Responsive min-h-screen with vertical scrolling across all application routes */}
       <main
-        className={`flex-1 w-full ${
-          isHome
-            ? "p-0 h-full overflow-hidden"
-            : isPredict
-            ? "p-3 sm:p-6 min-h-screen overflow-y-auto"
-            : "p-2 sm:p-3 h-full overflow-hidden"
+        className={`flex-1 w-full min-h-screen ${
+          isHome ? "p-0" : "p-3 sm:p-6 overflow-y-auto"
         }`}
       >
         <Outlet />

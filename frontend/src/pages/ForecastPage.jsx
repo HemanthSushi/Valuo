@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { toast } from "sonner";
 import {
   TrendingUp,
@@ -49,16 +49,11 @@ export default function ForecastPage() {
         setMeta(metaRes.data);
         setModelData(modelsRes.data);
 
-        // Pick datetime column or first categorical column if no explicit datetime
-        if (metaRes.data.datetime_columns?.length > 0) {
+        // Strictly check for verified chronological datetime columns
+        if (metaRes.data.datetime_columns && metaRes.data.datetime_columns.length > 0) {
           setSelectedDateCol(metaRes.data.datetime_columns[0]);
-        } else if (metaRes.data.categorical_columns?.length > 0) {
-          const dateCandidate = metaRes.data.categorical_columns.find((c) =>
-            /date|time|year|yr|month/i.test(c)
-          );
-          if (dateCandidate) {
-            setSelectedDateCol(dateCandidate);
-          }
+        } else {
+          setSelectedDateCol("");
         }
       } catch (error) {
         toast.error("Failed to load time series metadata.");
@@ -110,10 +105,8 @@ export default function ForecastPage() {
     return null;
   }
 
-  const allDateOptions = [
-    ...(meta.datetime_columns || []),
-    ...(meta.categorical_columns || []).filter((c) => !meta.datetime_columns?.includes(c)),
-  ];
+  // Strictly restrict to verified chronological datetime columns
+  const allDateOptions = meta.datetime_columns || [];
 
   // Prepare combined historical + forecast chart data
   let combinedChartData = [];
@@ -169,13 +162,51 @@ export default function ForecastPage() {
       </div>
 
       {allDateOptions.length === 0 ? (
-        <div className="p-10 text-center bg-card border border-border rounded-2xl max-w-md mx-auto space-y-3 shadow-md">
-          <Calendar className="w-10 h-10 text-indigo-500 mx-auto" />
-          <h2 className="text-base font-bold text-foreground">No Datetime Columns Detected</h2>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            This dataset contains no identified chronological columns (e.g. date, year, month).
-            You can upload the generated <strong className="text-foreground">sample_housing_data.csv</strong> which includes complete date timestamps.
-          </p>
+        <div className="p-8 sm:p-12 text-center bg-card border border-border rounded-3xl max-w-2xl mx-auto space-y-5 shadow-xl">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-foreground font-heading">
+              Cross-Sectional Dataset Notice: Time-Series Forecasting Unavailable
+            </h2>
+            <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed max-w-lg mx-auto">
+              The active dataset (<strong className="text-foreground font-semibold">{meta.filename || "Bengaluru Housing"}</strong>) is a 
+              cross-sectional inventory of residential property records with static spatial and architectural attributes.
+              It contains <strong className="text-foreground">no chronological time dimension</strong>.
+            </p>
+          </div>
+
+          <div className="p-4 bg-muted/40 rounded-2xl border border-border/80 text-left text-xs space-y-2 max-w-lg mx-auto">
+            <div className="flex items-start gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+              <span className="text-muted-foreground">
+                <strong className="text-foreground">Why ARIMA is disabled:</strong> Cross-sectional observations represent independent static listings rather than sequential temporal snapshots. Pseudo-date fields (such as <em>availability</em>) contain predominantly static text (&quot;Ready To Move&quot;) and drop &gt;80% of rows when parsed as dates, causing invalid, unverified ARIMA fits.
+              </span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 shrink-0" />
+              <span className="text-muted-foreground">
+                <strong className="text-foreground">How to enable forecasting:</strong> Upload a dedicated time-stamped transaction or index dataset with valid sequential dates (e.g., monthly sales index or repeated sales transactions).
+              </span>
+            </div>
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <Link
+              to="/upload"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-bold shadow-md hover:bg-primary/90 transition-all cursor-pointer"
+            >
+              <span>Upload Time-Series Dataset</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+            <Link
+              to={`/predict/${datasetId}`}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-secondary hover:bg-secondary/80 text-foreground text-xs font-bold border border-border transition-all"
+            >
+              <span>Go to Valuation Engine</span>
+            </Link>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -362,8 +393,8 @@ export default function ForecastPage() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* Summary Metric Strip */}
-                <div className="grid grid-cols-3 gap-3 pt-4 border-t border-border/80 text-xs">
+                {/* Summary Metric Strip & Statistical Diagnostics */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-border/80 text-xs">
                   <div className="p-3 rounded-xl bg-secondary/50 border border-border">
                     <span className="text-[10px] uppercase font-bold text-muted-foreground block">Historical Mean</span>
                     <span className="font-mono font-bold text-base text-foreground mt-0.5 block">
@@ -372,17 +403,34 @@ export default function ForecastPage() {
                   </div>
 
                   <div className="p-3 rounded-xl bg-secondary/50 border border-border">
-                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">Projected End Valuation</span>
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">Projected End Value</span>
                     <span className="font-mono font-bold text-base text-emerald-600 dark:text-emerald-400 mt-0.5 block">
                       ₹{forecast.forecast_values[forecast.forecast_values.length - 1].toFixed(2)} L
                     </span>
                   </div>
 
                   <div className="p-3 rounded-xl bg-secondary/50 border border-border">
-                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">Model Confidence</span>
-                    <span className="font-mono font-bold text-base text-indigo-600 dark:text-indigo-400 mt-0.5 block">
-                      95% Confidence Band
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">Stationarity (ADF Test)</span>
+                    <span className={`font-mono font-bold text-xs mt-1 block ${forecast.stationarity?.is_stationary ? 'text-emerald-500' : 'text-amber-500'}`}>
+                      {forecast.stationarity?.is_stationary ? 'Stationary (p < 0.05)' : `Diff Order d = ${forecast.stationarity?.differencing_order ?? 1}`}
                     </span>
+                    {forecast.stationarity?.p_value !== undefined && (
+                      <span className="text-[9px] text-muted-foreground block font-mono">
+                        ADF p-val: {forecast.stationarity.p_value}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-secondary/50 border border-border">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground block">ARIMA Model Order</span>
+                    <span className="font-mono font-bold text-xs text-indigo-500 mt-1 block">
+                      ARIMA({(forecast.stationarity?.selected_order || [1, 1, 1]).join(', ')})
+                    </span>
+                    {forecast.stationarity?.aic !== undefined && (
+                      <span className="text-[9px] text-muted-foreground block font-mono">
+                        AIC: {forecast.stationarity.aic}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

@@ -143,12 +143,12 @@ Every view needs designed empty, loading, error and success states.
 | ID | Category | Requirement |
 | :--- | :--- | :--- |
 | NFR-1 | Accessibility | WCAG AA contrast, visible focus rings, labelled inputs, full keyboard navigation |
-| NFR-2 | Responsiveness | Usable from phone width to wide desktop |
-| NFR-3 | Security | Hashed passwords, secrets in `.env`, CORS restricted to known origins, input validation, upload type and size limits |
-| NFR-4 | Performance | Page loads under 2s on a normal connection; training feedback shown while running |
+| NFR-2 | Responsiveness | Fluid layout across phone, tablet, laptop (1366×768, 1080p @ 125%), and wide desktop via `min-h-screen` and `overflow-y-auto` |
+| NFR-3 | Security | Hashed passwords, secrets in `.env`, CORS restricted to known origins, upload limits, HMAC-SHA256 model artifact signing, strict UUID path validation |
+| NFR-4 | Performance | Page loads under 2s; asynchronous worker threads for long-running ML training jobs (`/api/train/async`) preventing event loop starvation |
 | NFR-5 | Maintainability | Design tokens (colours, radii, spacing, fonts) in one place (Tailwind config and CSS variables) |
-| NFR-6 | Compatibility | Python 3.11 to 3.13, Node 18+, modern evergreen browsers |
-| NFR-7 | Reliability | App starts cleanly with no console or server errors; stale files do not crash it |
+| NFR-6 | Compatibility | Python 3.11 to 3.13, Node 18+, modern evergreen browsers; clean root startup via standard `uvicorn backend.server:app` |
+| NFR-7 | Reliability | App starts cleanly with no console or server errors; stale files do not crash it; real statistical uncertainty intervals without fake fallbacks |
 
 ---
 
@@ -159,7 +159,7 @@ Every view needs designed empty, loading, error and success states.
 - **Database:** SQLite (embedded, zero-server database with WAL mode for users, datasets metadata, models, and predictions); local disk workspace for binary artifacts.
 - **Remove:** LightGBM dependency, Linear Regression code paths, MongoDB/Motor dependencies.
 
-### 4.1 API surface (after change)
+### 6.1 API surface (after change)
 
 | Method | Endpoint | Purpose |
 | :--- | :--- | :--- |
@@ -171,14 +171,16 @@ Every view needs designed empty, loading, error and success states.
 | POST | `/api/upload` | Upload dataset |
 | GET | `/api/meta/{dataset_id}` | Column types and target suggestions |
 | GET | `/api/eda/{dataset_id}` | EDA results |
-| POST | `/api/train` | Train `RandomForest` and/or `XGBoost` |
+| POST | `/api/train` | Synchronous ML training for benchmark runs |
+| POST | `/api/train/async` | Asynchronous training offloaded to worker thread pool |
+| GET | `/api/train/status/{task_id}` | Real-time training progress and execution status polling |
 | GET | `/api/models/{dataset_id}` | Leaderboard metrics |
-| POST | `/api/predict` | Predict price |
+| POST | `/api/predict` | Predict price with empirical 95% confidence intervals |
 | GET | `/api/predict/random/{dataset_id}/{model_name}` | Random test-row check |
 | GET | `/api/explainability/{dataset_id}/{model_name}` | SHAP and importance |
-| POST | `/api/forecast` | ARIMA forecast |
+| POST | `/api/forecast` | ARIMA forecast with ADF unit-root stationarity check |
 
-New environment variables: `JWT_SECRET`, token expiry, plus `SQLITE_DB_PATH`, `CORS_ORIGINS`.
+New environment variables: `JWT_SECRET`, token expiry, `SQLITE_DB_PATH`, `CORS_ORIGINS`, `ARTIFACT_SIGNING_KEY`.
 
 ---
 
@@ -186,7 +188,7 @@ New environment variables: `JWT_SECRET`, token expiry, plus `SQLITE_DB_PATH`, `C
 
 - Rewrite README for the new name: updated badges (no LightGBM), features, stack, architecture diagram, API table, ML pipeline, all showing only two models.
 - Replace the glassmorphism design description with an accurate minimalist one.
-- Document auth endpoints and new `.env` variables; fix install steps and the repository tree.
+- Document auth endpoints, async task queue, security signing, and new `.env` variables; fix install steps and the repository tree.
 - Fewer emoji in headings; professional tone.
 - Regenerate screenshots with the updated capture script (new login flow and page names).
 
@@ -196,14 +198,18 @@ New environment variables: `JWT_SECRET`, token expiry, plus `SQLITE_DB_PATH`, `C
 
 1. Searching the repo for the old name (any casing) returns nothing.
 2. Only Random Forest and XGBoost appear in the backend, frontend, README and `requirements.txt`.
-3. Backend and frontend both start with no errors.
-4. A full flow works end to end: signup, login, upload, EDA, train both models, compare, explain, predict, forecast, logout.
+3. Backend and frontend both start with no errors from repository root (`uvicorn backend.server:app --port 8000`).
+4. A full flow works end to end: signup, login, upload, EDA, train both models (sync and async), compare, explain, predict, forecast, logout.
 5. Visiting any protected page while logged out redirects to login.
 6. Passwords are verified as hashed in the database.
 7. A design review against the "things to avoid" list in 4.2 finds none present.
 8. Light and dark mode both pass AA contrast checks on all pages.
 9. Opening an old workspace with Linear Regression or LightGBM files does not crash the app.
-10. README and screenshots match the final product.
+10. Model artifacts are verified via HMAC-SHA256 signatures before loading; unsigned files are rejected.
+11. Path traversal attempts on `dataset_id` are strictly rejected via UUID validation.
+12. Predicted 95% confidence interval bands are calculated using genuine tree variance and test residuals.
+13. Content is responsive and accessible without viewport clipping on common screen resolutions (1366×768 or 1080p @ 125% scaling).
+14. README and documentation match the final product.
 
 ---
 

@@ -25,16 +25,27 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error, m
 ROOT_DIR = Path(__file__).parent / "backend"
 sys.path.insert(0, str(ROOT_DIR.resolve()))
 
-import pipeline
-from pipeline import (
-    clean_housing_df,
-    clean_and_filter_housing_dataset,
-    filter_housing_training_data,
-    ValuoPreprocessor,
-    ValuoRateRegressor,
-    ValuoLogRegressor,
-    sync_internet_dataset
-)
+try:
+    from backend.pipeline import (
+        clean_housing_df,
+        clean_and_filter_housing_dataset,
+        filter_housing_training_data,
+        ValuoPreprocessor,
+        ValuoRateRegressor,
+        ValuoLogRegressor,
+        sync_internet_dataset
+    )
+except ImportError:
+    import pipeline
+    from pipeline import (
+        clean_housing_df,
+        clean_and_filter_housing_dataset,
+        filter_housing_training_data,
+        ValuoPreprocessor,
+        ValuoRateRegressor,
+        ValuoLogRegressor,
+        sync_internet_dataset
+    )
 
 WORKSPACE_DIR = ROOT_DIR / "workspace"
 DEFAULT_DATASET_ID = "06390047-ef89-4508-b930-6fc7a47f5e05"

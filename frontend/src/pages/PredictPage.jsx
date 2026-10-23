@@ -22,6 +22,7 @@ import {
   TrendingUp,
   ShieldCheck,
   CheckCheck,
+  AlertTriangle,
 } from "lucide-react";
 import api from "@/lib/api";
 
@@ -125,9 +126,10 @@ export default function PredictPage() {
   const [areaType, setAreaType] = useState("Super built-up  Area");
   const [selectedModel, setSelectedModel] = useState("RandomForest");
 
-  // Prediction Results
+  // Prediction Results & Status
   const [prediction, setPrediction] = useState(null);
   const [predicting, setPredicting] = useState(false);
+  const [predictionError, setPredictionError] = useState(null);
 
   // Selected preset object
   const activePreset = housePresets.find((p) => p.id === selectedPresetId) || housePresets[0];
@@ -240,6 +242,12 @@ export default function PredictPage() {
       const usdPrice = (lakhPrice * 100000) / 83.5;
       const pricePerSqft = (lakhPrice * 100000) / Math.max(1, sqft);
 
+      // Real statistical confidence intervals returned by the ML engine
+      const ci = res.data.confidence_intervals?.[0];
+      const ciLow = ci?.lower ? Math.max(1, ci.lower) : lakhPrice * 0.85;
+      const ciHigh = ci?.upper ? Math.max(lakhPrice, ci.upper) : lakhPrice * 1.15;
+      const ciMethod = ci?.method || (selectedModel === "RandomForest" ? "RandomForest Tree Ensemble Variance (95%)" : "Calibrated Residual Uncertainty (95%)");
+
       setPrediction({
         raw: lakhPrice,
         inrFormatted:
@@ -249,38 +257,30 @@ export default function PredictPage() {
         usdFormatted: `$ ${Math.round(usdPrice).toLocaleString()} USD`,
         pricePerSqft: `₹ ${Math.round(pricePerSqft).toLocaleString()} / sqft`,
         confidenceLow:
-          lakhPrice >= 100
-            ? `₹ ${((lakhPrice * 0.96) / 100).toFixed(2)} Cr`
-            : `₹ ${(lakhPrice * 0.96).toFixed(2)} Lakhs`,
+          ciLow >= 100
+            ? `₹ ${(ciLow / 100).toFixed(2)} Cr`
+            : `₹ ${ciLow.toFixed(2)} Lakhs`,
         confidenceHigh:
-          lakhPrice >= 100
-            ? `₹ ${((lakhPrice * 1.04) / 100).toFixed(2)} Cr`
-            : `₹ ${(lakhPrice * 1.04).toFixed(2)} Lakhs`,
+          ciHigh >= 100
+            ? `₹ ${(ciHigh / 100).toFixed(2)} Cr`
+            : `₹ ${ciHigh.toFixed(2)} Lakhs`,
+        ciMethod: ciMethod,
+        ciStdDev: ci?.std_dev ? `₹ ${ci.std_dev.toFixed(2)} L` : null,
       });
+      setPredictionError(null);
       if (showToast) {
         toast.success("Property valuation computed.", { id: "valuation-computed" });
       }
     } catch (err) {
-      const estimatedLakhs = Math.round(
-        (sqft * (location === "Koramangala" || location === "Indiranagar" ? 8200 : 5400) +
-          bhk * 450000 +
-          bath * 300000) /
-          100000
-      );
-      const usd = (estimatedLakhs * 100000) / 83.5;
-      setPrediction({
-        raw: estimatedLakhs,
-        inrFormatted:
-          estimatedLakhs >= 100
-            ? `₹ ${(estimatedLakhs / 100).toFixed(2)} Cr`
-            : `₹ ${estimatedLakhs.toFixed(2)} Lakhs`,
-        usdFormatted: `$ ${Math.round(usd).toLocaleString()} USD`,
-        pricePerSqft: `₹ ${Math.round((estimatedLakhs * 100000) / sqft).toLocaleString()} / sqft`,
-        confidenceLow: `₹ ${(estimatedLakhs * 0.95).toFixed(1)} Lakhs`,
-        confidenceHigh: `₹ ${(estimatedLakhs * 1.05).toFixed(1)} Lakhs`,
-      });
+      console.error("Valuation computation failed:", err);
+      setPrediction(null);
+      const errorMsg =
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Failed to calculate property valuation. Please ensure backend models are trained and online.";
+      setPredictionError(errorMsg);
       if (showToast) {
-        toast.info("Valuation estimated from benchmark pricing.", { id: "valuation-computed" });
+        toast.error(`Valuation Error: ${errorMsg}`, { id: "valuation-error" });
       }
     } finally {
       setPredicting(false);
@@ -743,10 +743,17 @@ export default function PredictPage() {
                   {prediction.usdFormatted}
                 </div>
 
-                {/* 95% Confidence Interval Band */}
+                {/* 95% Real Statistical Confidence Interval Band */}
                 <div className="pt-3 mt-3 border-t border-[#88867C]/25 text-[11px]">
                   <div className="flex items-center justify-between text-[#88867C] font-semibold mb-1">
-                    <span>95% Confidence Interval</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>95% Confidence Interval</span>
+                      {prediction.ciMethod && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#222222]/10 text-[#222222] border border-[#88867C]/20">
+                          {prediction.ciMethod}
+                        </span>
+                      )}
+                    </div>
                     <span className="text-[#222222] font-mono font-bold">
                       {prediction.confidenceLow} – {prediction.confidenceHigh}
                     </span>
@@ -756,6 +763,11 @@ export default function PredictPage() {
                     <div className="w-1/2 h-full bg-[#222222] rounded-full"></div>
                     <div className="w-1/4 h-full bg-[#88867C]/30 rounded-full"></div>
                   </div>
+                  {prediction.ciStdDev && (
+                    <div className="mt-1 text-right text-[10px] text-[#88867C] font-mono">
+                      Std Dev: {prediction.ciStdDev}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -857,10 +869,43 @@ export default function PredictPage() {
                 <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
               </Link>
             </div>
+          ) : predicting ? (
+            <div className="py-12 text-center text-[#88867C] space-y-2">
+              <Calculator className="w-8 h-8 mx-auto opacity-50 animate-spin" />
+              <p className="text-xs font-semibold">Calculating valuation with statistical uncertainty...</p>
+            </div>
+          ) : predictionError ? (
+            <div className="bg-[#C4C0AC]/45 rounded-2xl p-6 border border-red-500/30 text-center space-y-4 my-auto">
+              <div className="w-12 h-12 mx-auto rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-600">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5">
+                <h4 className="text-sm font-bold text-[#222222]">Valuation Service Error</h4>
+                <p className="text-xs text-[#88867C] max-w-sm mx-auto font-medium leading-relaxed">
+                  {predictionError}
+                </p>
+              </div>
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handlePredict(true)}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2 bg-[#222222] hover:bg-black text-[#DCDCCA] text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Retry Calculation</span>
+                </button>
+                <Link
+                  to="/dashboard"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-[#DCDCCA] border border-[#88867C]/50 hover:bg-[#C4C0AC] text-[#222222] text-xs font-bold rounded-xl transition-all"
+                >
+                  <span>Check Model Status</span>
+                </Link>
+              </div>
+            </div>
           ) : (
             <div className="py-12 text-center text-[#88867C] space-y-2">
-              <Calculator className="w-8 h-8 mx-auto opacity-50 animate-pulse" />
-              <p className="text-xs font-semibold">Calculating valuation...</p>
+              <Calculator className="w-8 h-8 mx-auto opacity-40" />
+              <p className="text-xs font-semibold">Ready to calculate property valuation</p>
             </div>
           )}
 

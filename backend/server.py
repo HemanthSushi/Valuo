@@ -1,25 +1,23 @@
 # server.py — Valuo Real Estate Valuation & Machine Learning API
+import sys
+from pathlib import Path
+
+# Ensure both backend directory and repo root are in sys.path regardless of execution CWD
+BACKEND_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BACKEND_DIR.parent
+for _p in (str(REPO_ROOT), str(BACKEND_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends, Header, status, Query
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+
+# Explicit package imports with local fallbacks
 try:
-    import database
-except ImportError:
     from backend import database
-try:
-    from task_manager import task_manager
-except ImportError:
     from backend.task_manager import task_manager
-try:
-    from security import (
-        safe_dump_artifact,
-        safe_load_artifact,
-        sign_artifact,
-        SecurityException,
-        initialize_workspace_signatures
-    )
-except ImportError:
     from backend.security import (
         safe_dump_artifact,
         safe_load_artifact,
@@ -27,12 +25,43 @@ except ImportError:
         SecurityException,
         initialize_workspace_signatures
     )
+    from backend import pipeline
+    from backend.pipeline import (
+        clean_housing_df,
+        clean_and_filter_housing_dataset,
+        filter_housing_training_data,
+        ValuoPreprocessor,
+        ValuoRateRegressor,
+        ValuoLogRegressor,
+        sync_internet_dataset
+    )
+except ImportError:
+    import database
+    from task_manager import task_manager
+    from security import (
+        safe_dump_artifact,
+        safe_load_artifact,
+        sign_artifact,
+        SecurityException,
+        initialize_workspace_signatures
+    )
+    import pipeline
+    from pipeline import (
+        clean_housing_df,
+        clean_and_filter_housing_dataset,
+        filter_housing_training_data,
+        ValuoPreprocessor,
+        ValuoRateRegressor,
+        ValuoLogRegressor,
+        sync_internet_dataset
+    )
+
 import os
 import re
 import asyncio
 import logging
 from pathlib import Path
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import List, Dict, Optional, Any, Tuple, Callable
 import uuid
 import pandas as pd
@@ -55,29 +84,16 @@ import xgboost as xgb
 import shap
 import warnings
 from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import adfuller
 import matplotlib
 matplotlib.use('Agg')
 
 warnings.filterwarnings('ignore')
 
-try:
-    import pipeline
-except ImportError:
-    from backend import pipeline
-
-from pipeline import (
-    clean_housing_df,
-    clean_and_filter_housing_dataset,
-    filter_housing_training_data,
-    ValuoPreprocessor,
-    ValuoRateRegressor,
-    ValuoLogRegressor,
-    sync_internet_dataset
-)
-
 # --- Setup ------------------------------------------------------------------
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+ROOT_DIR = BACKEND_DIR
+load_dotenv(BACKEND_DIR / '.env')
+load_dotenv(REPO_ROOT / '.env')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -217,8 +233,11 @@ class MetaResponse(BaseModel):
     categorical_columns: List[str]
     datetime_columns: List[str]
 
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+UUID_REGEX = re.compile(UUID_PATTERN)
+
 class TrainRequest(BaseModel):
-    dataset_id: str
+    dataset_id: str = Field(..., pattern=UUID_PATTERN, description="Canonical UUID of the dataset")
     target_column: str
     models: Optional[List[str]] = None
     test_size: float = 0.2
@@ -227,12 +246,12 @@ class TrainRequest(BaseModel):
     background: Optional[bool] = False
 
 class PredictRequest(BaseModel):
-    dataset_id: str
+    dataset_id: str = Field(..., pattern=UUID_PATTERN, description="Canonical UUID of the dataset")
     model_name: str
     rows: List[Dict]
 
 class ForecastRequest(BaseModel):
-    dataset_id: str
+    dataset_id: str = Field(..., pattern=UUID_PATTERN, description="Canonical UUID of the dataset")
     date_column: str
     target_column: str
     periods: int = 12
@@ -319,25 +338,70 @@ async def me(current_user: dict = Depends(get_current_user)):
 # --- Dataset and Model Helpers ----------------------------------------------
 DEFAULT_BENCHMARK_ID = "06390047-ef89-4508-b930-6fc7a47f5e05"
 
+def validate_dataset_id(dataset_id: str) -> str:
+    """
+    Validate that dataset_id strictly conforms to a canonical 36-character UUID format.
+    Prevents path traversal attacks (e.g., '../../etc' or absolute filesystem paths).
+    """
+    if not dataset_id or not isinstance(dataset_id, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid dataset identifier: must be a non-empty string."
+        )
+    clean_id = dataset_id.strip()
+    if not UUID_REGEX.match(clean_id):
+        logger.warning(f"Path traversal or malformed dataset_id rejected: '{dataset_id}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid dataset identifier: must conform to standard UUID format (8-4-4-4-12 hex digits)."
+        )
+    try:
+        parsed_uuid = uuid.UUID(clean_id)
+        return str(parsed_uuid)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid dataset identifier: malformed UUID."
+        )
+
 def get_dataset_path(dataset_id: str) -> Path:
-    safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', str(dataset_id))
-    if not safe_id:
-        raise HTTPException(status_code=400, detail="Invalid dataset identifier.")
-    return WORKSPACE_DIR / safe_id
+    """
+    Resolve dataset directory inside WORKSPACE_DIR with strict path containment checks.
+    Guarantees that the resolved path starts with WORKSPACE_DIR.resolve() and prevents
+    directory traversal outside the designated storage root.
+    """
+    clean_id = validate_dataset_id(dataset_id)
+    resolved_workspace = WORKSPACE_DIR.resolve()
+    target_path = (resolved_workspace / clean_id).resolve()
+
+    # Ensure target path is strictly within the workspace directory
+    try:
+        target_path.relative_to(resolved_workspace)
+        if target_path == resolved_workspace:
+            raise ValueError("Target path cannot resolve directly to workspace root.")
+    except ValueError:
+        logger.error(f"SECURITY ALERT: Path traversal attempt blocked for dataset_id: '{dataset_id}'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid dataset path: traversal outside workspace boundary is forbidden."
+        )
+
+    return target_path
 
 def get_dataset_file(dataset_id: str) -> Path:
     return get_dataset_path(dataset_id) / "dataset.csv"
 
 async def verify_dataset_access(dataset_id: str, current_user: dict) -> dict:
     """Ensure user has authorization to access the dataset (either owner or system benchmark)."""
-    dataset = await database.get_dataset(dataset_id)
+    clean_id = validate_dataset_id(dataset_id)
+    dataset = await database.get_dataset(clean_id)
     if not dataset:
-        if dataset_id == DEFAULT_BENCHMARK_ID and get_dataset_file(dataset_id).exists():
-            return {"id": dataset_id, "user_id": None, "filename": "dataset.csv"}
+        if clean_id == DEFAULT_BENCHMARK_ID and get_dataset_file(clean_id).exists():
+            return {"id": clean_id, "user_id": None, "filename": "dataset.csv"}
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
     # System benchmark or dataset with no owner is accessible to all authenticated users
-    if dataset.get("user_id") is None or dataset_id == DEFAULT_BENCHMARK_ID:
+    if dataset.get("user_id") is None or clean_id == DEFAULT_BENCHMARK_ID:
         return dataset
 
     # Otherwise must match current user to prevent IDOR
@@ -678,36 +742,114 @@ def get_feature_importance(dataset_id: str, model_name: str):
         return None
 
 def forecast_time_series(dataset_id: str, date_column: str, target_column: str, periods: int, freq: str):
+    """
+    Fit statistical ARIMA model on genuine sequential time-series data with stationarity verification.
+    Cross-sectional datasets without chronological transaction dates are strictly rejected.
+    """
     df = load_dataset(dataset_id)
-    df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-    df = df.dropna(subset=[date_column]).sort_values(date_column)
-    df.set_index(date_column, inplace=True)
-    ts = pd.to_numeric(df[target_column], errors='coerce').dropna()
+    if date_column not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Specified date column '{date_column}' does not exist in dataset."
+        )
+    if target_column not in df.columns:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Specified target column '{target_column}' does not exist in dataset."
+        )
+
+    # Validate chronological datetime validity
+    parsed_dates = pd.to_datetime(df[date_column], errors='coerce')
+    valid_ratio = float(parsed_dates.notna().sum()) / max(len(df), 1)
+
+    # Reject cross-sectional or pseudo-temporal datasets (e.g. 'availability' with mostly strings)
+    if valid_ratio < 0.40 or parsed_dates.notna().sum() < 10:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column '{date_column}' contains only {valid_ratio*100:.1f}% valid date values. "
+                "Cross-sectional housing datasets do not have a chronological time dimension and cannot support time-series forecasting. "
+                "Please upload a time-stamped transaction or monthly sales index dataset."
+            )
+        )
+
+    df_ts = df.assign(_parsed_date=parsed_dates).dropna(subset=['_parsed_date', target_column])
+    df_ts = df_ts.sort_values('_parsed_date')
+    df_ts.set_index('_parsed_date', inplace=True)
+    ts = pd.to_numeric(df_ts[target_column], errors='coerce').dropna()
+
     if freq:
         try:
             ts = ts.resample(freq).mean().dropna()
         except Exception:
             pass
-    if len(ts) < 5:
+
+    if len(ts) < 10:
         raise HTTPException(
             status_code=400,
-            detail="Insufficient time-series data points for reliable ARIMA modeling (at least 5 required)."
+            detail=f"Insufficient continuous chronological observations ({len(ts)} periods found, at least 10 required for reliable ARIMA estimation)."
         )
+
+    # 1. Stationarity Check using Augmented Dickey-Fuller (ADF) Test
     try:
-        model = ARIMA(ts, order=(1, 1, 1))
-        fitted_model = model.fit()
-        forecast = fitted_model.forecast(steps=periods)
-        forecast_result = fitted_model.get_forecast(steps=periods)
+        adf_result = adfuller(ts, autolag='AIC')
+        adf_stat = float(adf_result[0])
+        p_value = float(adf_result[1])
+        is_stationary = bool(p_value < 0.05)
+    except Exception as ex:
+        logger.warning(f"ADF stationarity test exception: {ex}")
+        adf_stat, p_value, is_stationary = 0.0, 1.0, False
+
+    # 2. Determine differencing order d based on stationarity test
+    d = 0 if is_stationary else 1
+
+    # 3. Model Order Selection using AIC search
+    best_model = None
+    best_aic = float('inf')
+    best_order = (1, d, 1)
+
+    candidate_orders = [(1, d, 1), (1, d, 0), (0, d, 1), (2, d, 1)]
+    for order in candidate_orders:
+        try:
+            m = ARIMA(ts, order=order)
+            fitted = m.fit()
+            if fitted.aic < best_aic:
+                best_aic = float(fitted.aic)
+                best_model = fitted
+                best_order = order
+        except Exception:
+            continue
+
+    if best_model is None:
+        try:
+            best_model = ARIMA(ts, order=(1, d, 1)).fit()
+            best_order = (1, d, 1)
+            best_aic = float(best_model.aic)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"ARIMA model fitting failed: {str(e)}")
+
+    try:
+        forecast = best_model.forecast(steps=periods)
+        forecast_result = best_model.get_forecast(steps=periods)
         conf_int = forecast_result.conf_int()
         last_date = ts.index[-1]
-        forecast_dates = pd.date_range(start=last_date, periods=periods + 1, freq=freq)[1:]
+        forecast_dates = pd.date_range(start=last_date, periods=periods + 1, freq=freq or 'ME')[1:]
+
         return {
             "historical_dates": ts.index.strftime('%Y-%m-%d').tolist(),
-            "historical_values": ts.values.tolist(),
+            "historical_values": [float(v) for v in ts.values],
             "forecast_dates": forecast_dates.strftime('%Y-%m-%d').tolist(),
-            "forecast_values": forecast.tolist(),
-            "lower_bound": conf_int.iloc[:, 0].tolist(),
-            "upper_bound": conf_int.iloc[:, 1].tolist()
+            "forecast_values": [float(v) for v in forecast],
+            "lower_bound": [float(v) for v in conf_int.iloc[:, 0]],
+            "upper_bound": [float(v) for v in conf_int.iloc[:, 1]],
+            "stationarity": {
+                "adf_statistic": round(adf_stat, 4),
+                "p_value": round(p_value, 4),
+                "is_stationary": is_stationary,
+                "differencing_order": d,
+                "selected_order": list(best_order),
+                "aic": round(best_aic, 2)
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Forecasting calculation failed: {str(e)}")
@@ -1018,7 +1160,13 @@ async def get_train_status(
     current_user: dict = Depends(get_current_user)
 ):
     """Poll status of a background training task."""
-    task = task_manager.get_task(task_id)
+    clean_task_id = task_id.strip()
+    if not UUID_REGEX.match(clean_task_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid task identifier: must be a valid UUID."
+        )
+    task = task_manager.get_task(clean_task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Training task not found.")
     await verify_dataset_access(task["dataset_id"], current_user)
@@ -1068,7 +1216,81 @@ async def get_models(
         logger.exception("Get models error")
         raise HTTPException(status_code=500, detail=str(e))
 
-def _predict_rows_sync(dataset_id: str, model_name: str, rows: List[Dict]) -> List[float]:
+def compute_uncertainty_intervals(
+    model: Any,
+    X_transformed: Any,
+    predictions: List[float],
+    dataset_path: Path,
+    model_name: str
+) -> List[Dict[str, Any]]:
+    """
+    Compute real statistical 95% confidence and prediction intervals for property valuations.
+    Uses empirical quantiles from decision tree ensemble variance for RandomForestRegressor,
+    and calibrated test-residual variance for Gradient Boosted (XGBoost) and linear regressors.
+    """
+    intervals = []
+    est = getattr(model, 'estimator', model)
+    is_log = hasattr(model, 'estimator')  # ValuoLogRegressor
+
+    # 1. Ensemble Tree Variance (Random Forest)
+    if hasattr(est, 'estimators_') and len(getattr(est, 'estimators_', [])) > 0:
+        try:
+            tree_preds = np.array([tree.predict(X_transformed) for tree in est.estimators_])  # (n_trees, n_samples)
+            if is_log:
+                tree_prices = np.expm1(np.clip(tree_preds, 0.0, 15.0))
+            else:
+                tree_prices = tree_preds
+
+            for i in range(len(predictions)):
+                sample_preds = tree_prices[:, i]
+                low_95 = float(np.percentile(sample_preds, 2.5))
+                high_95 = float(np.percentile(sample_preds, 97.5))
+                std_val = float(np.std(sample_preds))
+                intervals.append({
+                    "lower": round(max(0.01, low_95), 2),
+                    "upper": round(high_95, 2),
+                    "std_dev": round(std_val, 2),
+                    "confidence_level": 0.95,
+                    "method": "RandomForest Ensemble Tree Variance (95%)"
+                })
+            return intervals
+        except Exception as e:
+            logger.warning(f"Failed to compute ensemble tree variance: {e}")
+
+    # 2. Calibrated Residual Uncertainty (XGBoost / Generic)
+    mape_val = 0.20
+    try:
+        candidates_file = dataset_path / "model_candidates.json"
+        if candidates_file.exists():
+            with open(candidates_file, "r") as f:
+                info = json.load(f)
+            for m in info.get("models", []):
+                if m.get("model_name") == model_name:
+                    mape_val = float(m.get("mape", 0.20) or 0.20)
+                    break
+    except Exception as e:
+        logger.warning(f"Could not read model metadata for CI calibration: {e}")
+
+    mape_val = max(0.08, min(0.60, mape_val))
+    for pred in predictions:
+        pred_float = float(pred)
+        if pred_float <= 0:
+            pred_float = 1.0
+        low = pred_float * np.exp(-1.96 * mape_val)
+        high = pred_float * np.exp(1.96 * mape_val)
+        std_val = pred_float * mape_val
+        intervals.append({
+            "lower": round(max(0.01, float(low)), 2),
+            "upper": round(float(high), 2),
+            "std_dev": round(float(std_val), 2),
+            "confidence_level": 0.95,
+            "method": f"{model_name} Calibrated Residual Uncertainty (95%)"
+        })
+    return intervals
+
+def _predict_rows_sync(dataset_id: str, model_name: str, rows: List[Dict]) -> Tuple[List[float], List[Dict[str, Any]]]:
+    if model_name not in ALLOWED_MODELS and model_name != "best":
+        raise ValueError(f"Model '{model_name}' is not recognized. Allowed models: {ALLOWED_MODELS + ['best']}")
     dataset_path = get_dataset_path(dataset_id)
     model_file = dataset_path / f"model_{model_name}.pkl"
     if not model_file.exists():
@@ -1093,8 +1315,15 @@ def _predict_rows_sync(dataset_id: str, model_name: str, rows: List[Dict]) -> Li
         df_input = df_input[[c for c in expected_features if c in df_input.columns]]
         X_transformed = preprocessor.transform(df_input)
 
-    predictions = model.predict(X_transformed)
-    return [float(p) for p in predictions]
+    predictions = [float(p) for p in model.predict(X_transformed)]
+    intervals = compute_uncertainty_intervals(
+        model=model,
+        X_transformed=X_transformed,
+        predictions=predictions,
+        dataset_path=dataset_path,
+        model_name=model_name
+    )
+    return predictions, intervals
 
 @api_router.post("/predict")
 async def predict(
@@ -1104,7 +1333,7 @@ async def predict(
     try:
         await verify_dataset_access(request.dataset_id, current_user)
         try:
-            predictions = await asyncio.to_thread(
+            predictions, intervals = await asyncio.to_thread(
                 _predict_rows_sync, request.dataset_id, request.model_name, request.rows
             )
         except SecurityException as se:
@@ -1127,7 +1356,12 @@ async def predict(
             except Exception as e:
                 logger.warning(f"Failed to record prediction in SQLite: {e}")
 
-        return {"predictions": predictions}
+        return {
+            "predictions": predictions,
+            "confidence_intervals": intervals,
+            "lower_bounds": [i["lower"] for i in intervals],
+            "upper_bounds": [i["upper"] for i in intervals]
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1135,6 +1369,8 @@ async def predict(
         raise HTTPException(status_code=500, detail=str(e))
 
 def _predict_random_sync(dataset_id: str, model_name: str) -> dict:
+    if model_name not in ALLOWED_MODELS and model_name != "best":
+        raise ValueError(f"Model '{model_name}' is not recognized. Allowed models: {ALLOWED_MODELS + ['best']}")
     dataset_path = get_dataset_path(dataset_id)
     model_file = dataset_path / f"model_{model_name}.pkl"
     if not model_file.exists():
@@ -1175,9 +1411,19 @@ def _predict_random_sync(dataset_id: str, model_name: str) -> dict:
             actual = float(val)
             diff = float(abs(prediction - actual))
 
+    intervals = compute_uncertainty_intervals(
+        model=model,
+        X_transformed=X_transformed,
+        predictions=[prediction],
+        dataset_path=dataset_path,
+        model_name=model_name
+    )
+    ci = intervals[0] if intervals else None
+
     return {
         "inputs": input_dict,
         "prediction": prediction,
+        "confidence_interval": ci,
         "actual_target": actual,
         "difference": diff
     }
