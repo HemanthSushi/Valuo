@@ -1,19 +1,39 @@
 # server.py — Valuo Real Estate Valuation & Machine Learning API
-from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends, Header, status
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, APIRouter, File, UploadFile, HTTPException, Depends, Header, status, Query
+from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 try:
     import database
 except ImportError:
     from backend import database
+try:
+    from task_manager import task_manager
+except ImportError:
+    from backend.task_manager import task_manager
+try:
+    from security import (
+        safe_dump_artifact,
+        safe_load_artifact,
+        sign_artifact,
+        SecurityException,
+        initialize_workspace_signatures
+    )
+except ImportError:
+    from backend.security import (
+        safe_dump_artifact,
+        safe_load_artifact,
+        sign_artifact,
+        SecurityException,
+        initialize_workspace_signatures
+    )
 import os
 import re
 import asyncio
 import logging
 from pathlib import Path
 from pydantic import BaseModel, EmailStr
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple, Callable
 import uuid
 import pandas as pd
 import numpy as np
@@ -82,6 +102,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         database.init_db()
+        initialize_workspace_signatures(WORKSPACE_DIR)
         stats = await database.get_db_stats()
         logger.info(
             f"SQLite storage engine active: {stats['file_path']} "
@@ -94,6 +115,7 @@ async def lifespan(app: FastAPI):
 
 WORKSPACE_DIR = ROOT_DIR / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
+initialize_workspace_signatures(WORKSPACE_DIR)
 
 app = FastAPI(
     title="Valuo API",
@@ -202,6 +224,7 @@ class TrainRequest(BaseModel):
     test_size: float = 0.2
     random_state: int = 42
     cv_folds: Optional[int] = None
+    background: Optional[bool] = False
 
 class PredictRequest(BaseModel):
     dataset_id: str
@@ -234,7 +257,7 @@ async def signup(request: SignupRequest):
         )
 
     user_id = str(uuid.uuid4())
-    hashed = hash_password(request.password)
+    hashed = await asyncio.to_thread(hash_password, request.password)
     await database.create_user(user_id, name_clean, email_clean, hashed)
 
     token = create_access_token({
@@ -253,7 +276,16 @@ async def login(request: LoginRequest):
     email_clean = request.email.lower().strip()
 
     user = await database.get_user_by_email(email_clean)
-    if not user or not verify_password(request.password, user.get("hashed_password", "")):
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password."
+        )
+
+    valid_password = await asyncio.to_thread(
+        verify_password, request.password, user.get("hashed_password", "")
+    )
+    if not valid_password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password."
@@ -415,8 +447,12 @@ def train_models(
     test_size: float,
     random_state: int,
     cv_folds: Optional[int],
-    dataset_id: str
+    dataset_id: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None
 ):
+    if progress_callback:
+        progress_callback(20, "Preprocessing dataset features")
+
     dataset_path = get_dataset_path(dataset_id)
     is_housing = any(
         c.lower() in ['total_sqft', 'area_sqft', 'sqft', 'square_feet', 'bedrooms', 'bhk']
@@ -503,7 +539,7 @@ def train_models(
             )
         }
 
-    joblib.dump(preprocessor, dataset_path / "preprocessor.pkl")
+    safe_dump_artifact(preprocessor, dataset_path / "preprocessor.pkl")
     with open(dataset_path / "training_features.json", "w") as f:
         json.dump(training_features, f)
     with open(dataset_path / "feature_names.json", "w") as f:
@@ -515,7 +551,10 @@ def train_models(
 
     results = []
     import time
-    for model_name in valid_models:
+    for idx, model_name in enumerate(valid_models):
+        if progress_callback:
+            pct = 35 + int((idx / len(valid_models)) * 50)
+            progress_callback(pct, f"Training {model_name} model")
         model = model_constructors[model_name]()
         start_time = time.time()
         model.fit(X_train_transformed, y_train)
@@ -530,7 +569,7 @@ def train_models(
         except Exception:
             mape = 0.0
 
-        joblib.dump(model, dataset_path / f"model_{model_name}.pkl")
+        safe_dump_artifact(model, dataset_path / f"model_{model_name}.pkl")
         results.append({
             "model_name": model_name,
             "rmse": rmse,
@@ -544,9 +583,13 @@ def train_models(
     if not results:
         raise ValueError("No valid models were trained.")
 
+    if progress_callback:
+        progress_callback(90, "Evaluating model candidates and persisting artifacts")
+
     best_model = min(results, key=lambda x: x['rmse'])
     best_model_name = best_model['model_name']
     shutil.copy(dataset_path / f"model_{best_model_name}.pkl", dataset_path / "model_best.pkl")
+    sign_artifact(dataset_path / "model_best.pkl")
 
     with open(dataset_path / "model_candidates.json", "w") as f:
         json.dump({
@@ -566,8 +609,8 @@ def compute_shap_values(dataset_id: str, model_name: str, sample_size: int = 40)
         return None
 
     try:
-        model = joblib.load(model_file)
-        preprocessor = joblib.load(dataset_path / "preprocessor.pkl")
+        model = safe_load_artifact(model_file)
+        preprocessor = safe_load_artifact(dataset_path / "preprocessor.pkl")
         df = load_dataset(dataset_id)
         with open(dataset_path / "model_candidates.json", "r") as f:
             model_info = json.load(f)
@@ -600,6 +643,9 @@ def compute_shap_values(dataset_id: str, model_name: str, sample_size: int = 40)
             "feature_names": [feature_names[i] for i in top_indices],
             "mean_shap_values": mean_shap[top_indices].tolist()
         }
+    except SecurityException as se:
+        logger.error(f"Security Alert: Untrusted artifact in compute_shap_values: {se}")
+        return None
     except Exception as e:
         logger.warning(f"SHAP computation exception for {model_name}: {e}")
         return None
@@ -611,7 +657,7 @@ def get_feature_importance(dataset_id: str, model_name: str):
         return None
 
     try:
-        model = joblib.load(model_file)
+        model = safe_load_artifact(model_file)
         with open(dataset_path / "feature_names.json", "r") as f:
             feature_names = json.load(f)
         tree_estimator = getattr(model, 'estimator', model)
@@ -623,6 +669,9 @@ def get_feature_importance(dataset_id: str, model_name: str):
                 "feature_names": [feature_names[i] for i in top_indices],
                 "importances": importances[top_indices].tolist()
             }
+        return None
+    except SecurityException as se:
+        logger.error(f"Security Alert: Untrusted artifact in get_feature_importance: {se}")
         return None
     except Exception as e:
         logger.warning(f"Feature importance exception for {model_name}: {e}")
@@ -680,6 +729,22 @@ async def root():
         "supported_models": ALLOWED_MODELS
     }
 
+def _process_uploaded_file_sync(contents: bytes, filename: str, dataset_path: Path):
+    if filename.lower().endswith('.csv'):
+        df = pd.read_csv(io.BytesIO(contents))
+    elif filename.lower().endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(io.BytesIO(contents))
+    else:
+        raise ValueError("Unsupported file format. Please upload a CSV or Excel (.xlsx/.xls) file.")
+
+    if len(df) == 0:
+        raise ValueError("The uploaded file contains no data rows.")
+
+    csv_file_path = dataset_path / "dataset.csv"
+    df.to_csv(csv_file_path, index=False)
+    sample_records = df.head(5).replace({np.nan: None}).to_dict('records')
+    return len(df), len(df.columns), df.columns.tolist(), sample_records, str(csv_file_path)
+
 @api_router.post("/upload", response_model=UploadResponse)
 async def upload_dataset(
     file: UploadFile = File(...),
@@ -695,47 +760,67 @@ async def upload_dataset(
         dataset_path.mkdir(exist_ok=True)
 
         try:
-            if file.filename.lower().endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(contents))
-            elif file.filename.lower().endswith(('.xlsx', '.xls')):
-                df = pd.read_excel(io.BytesIO(contents))
-            else:
-                raise HTTPException(status_code=400, detail="Unsupported file format. Please upload a CSV or Excel (.xlsx/.xls) file.")
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
-
-        if len(df) == 0:
-            raise HTTPException(status_code=400, detail="The uploaded file contains no data rows.")
-
-        csv_file_path = dataset_path / "dataset.csv"
-        df.to_csv(csv_file_path, index=False)
+            rows, cols, col_names, sample_data, csv_file_path = await asyncio.to_thread(
+                _process_uploaded_file_sync, contents, file.filename, dataset_path
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
 
         # Persist dataset metadata into SQLite associated with current user
         await database.save_dataset(
             dataset_id=dataset_id,
             filename=file.filename,
-            rows=len(df),
-            columns=len(df.columns),
-            file_path=str(csv_file_path),
-            column_names=df.columns.tolist(),
+            rows=rows,
+            columns=cols,
+            file_path=csv_file_path,
+            column_names=col_names,
             user_id=current_user["id"]
         )
 
         return UploadResponse(
             dataset_id=dataset_id,
             filename=file.filename,
-            rows=len(df),
-            columns=len(df.columns),
-            column_names=df.columns.tolist(),
-            sample_data=df.head(5).replace({np.nan: None}).to_dict('records')
+            rows=rows,
+            columns=cols,
+            column_names=col_names,
+            sample_data=sample_data
         )
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Upload error")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _compute_dataset_meta_sync(dataset_id: str) -> dict:
+    df = load_dataset(dataset_id)
+    column_types = detect_column_types(df)
+    suggested_targets = suggest_target_columns(df)
+    col_type_map = {}
+    for col in df.columns:
+        if col in column_types['numeric']:
+            col_type_map[col] = 'numeric'
+        elif col in column_types['categorical']:
+            col_type_map[col] = 'categorical'
+        elif col in column_types['datetime']:
+            col_type_map[col] = 'datetime'
+        else:
+            col_type_map[col] = 'text'
+
+    unique_values = {}
+    for col in column_types['categorical']:
+        unique_values[col] = df[col].dropna().unique().tolist()[:50]
+
+    return {
+        "dataset_id": dataset_id,
+        "rows": len(df),
+        "columns": len(df.columns),
+        "column_types": col_type_map,
+        "unique_values": unique_values,
+        "suggested_targets": suggested_targets,
+        "numeric_columns": column_types['numeric'],
+        "categorical_columns": column_types['categorical'],
+        "datetime_columns": column_types['datetime']
+    }
 
 @api_router.get("/meta/{dataset_id}", response_model=MetaResponse)
 async def get_dataset_meta(
@@ -744,40 +829,18 @@ async def get_dataset_meta(
 ):
     try:
         await verify_dataset_access(dataset_id, current_user)
-        df = load_dataset(dataset_id)
-        column_types = detect_column_types(df)
-        suggested_targets = suggest_target_columns(df)
-        col_type_map = {}
-        for col in df.columns:
-            if col in column_types['numeric']:
-                col_type_map[col] = 'numeric'
-            elif col in column_types['categorical']:
-                col_type_map[col] = 'categorical'
-            elif col in column_types['datetime']:
-                col_type_map[col] = 'datetime'
-            else:
-                col_type_map[col] = 'text'
-
-        unique_values = {}
-        for col in column_types['categorical']:
-            unique_values[col] = df[col].dropna().unique().tolist()[:50]
-
-        return MetaResponse(
-            dataset_id=dataset_id,
-            rows=len(df),
-            columns=len(df.columns),
-            column_types=col_type_map,
-            unique_values=unique_values,
-            suggested_targets=suggested_targets,
-            numeric_columns=column_types['numeric'],
-            categorical_columns=column_types['categorical'],
-            datetime_columns=column_types['datetime']
-        )
+        meta_dict = await asyncio.to_thread(_compute_dataset_meta_sync, dataset_id)
+        return MetaResponse(**meta_dict)
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Meta error")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _compute_dataset_eda_sync(dataset_id: str) -> dict:
+    df = load_dataset(dataset_id)
+    column_types = detect_column_types(df)
+    return compute_eda(df, column_types)
 
 @api_router.get("/eda/{dataset_id}")
 async def get_eda(
@@ -786,40 +849,47 @@ async def get_eda(
 ):
     try:
         await verify_dataset_access(dataset_id, current_user)
-        df = load_dataset(dataset_id)
-        column_types = detect_column_types(df)
-        return compute_eda(df, column_types)
+        return await asyncio.to_thread(_compute_dataset_eda_sync, dataset_id)
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("EDA error")
         raise HTTPException(status_code=500, detail=str(e))
 
-@api_router.post("/train")
-async def train_model(
-    request: TrainRequest,
-    current_user: dict = Depends(get_current_user)
-):
+def execute_training_pipeline_sync(
+    task_id: str,
+    dataset_id: str,
+    target_column: str,
+    models_requested: List[str],
+    test_size: float,
+    random_state: int,
+    cv_folds: Optional[int]
+) -> Tuple[List[dict], str]:
+    """Execute training pipeline safely within a worker thread without blocking asyncio loop."""
     try:
-        await verify_dataset_access(request.dataset_id, current_user)
-        df = load_dataset(request.dataset_id)
-        if request.target_column not in df.columns:
-            raise HTTPException(status_code=400, detail=f"Target column '{request.target_column}' not found in dataset.")
+        task_manager.update_progress(task_id, 10, "Loading and validating dataset", status="running")
+        df = load_dataset(dataset_id)
+        if target_column not in df.columns:
+            raise ValueError(f"Target column '{target_column}' not found in dataset.")
 
-        models_requested = request.models if request.models else ALLOWED_MODELS
-        results, best_model_name = await asyncio.to_thread(
-            train_models,
-            df,
-            request.target_column,
-            models_requested,
-            request.test_size,
-            request.random_state,
-            request.cv_folds,
-            request.dataset_id
+        def _on_progress(pct: int, msg: str):
+            task_manager.update_progress(task_id, pct, msg, status="running")
+
+        results, best_model_name = train_models(
+            df=df,
+            target_column=target_column,
+            models_to_train=models_requested,
+            test_size=test_size,
+            random_state=random_state,
+            cv_folds=cv_folds,
+            dataset_id=dataset_id,
+            progress_callback=_on_progress
         )
+
+        task_manager.update_progress(task_id, 95, "Recording model results in database", status="running")
         for m in results:
-            await database.save_model_result(
-                dataset_id=request.dataset_id,
+            database._save_model_result_sync(
+                dataset_id=dataset_id,
                 model_name=m["model_name"],
                 rmse=m["rmse"],
                 mae=m["mae"],
@@ -828,12 +898,161 @@ async def train_model(
                 train_time=m.get("train_time", 0.0),
                 is_best=(m["model_name"] == best_model_name)
             )
-        return {"results": results, "best_model": best_model_name}
+
+        task_manager.mark_completed(task_id, results, best_model_name)
+        return results, best_model_name
+    except Exception as e:
+        logger.exception(f"Training pipeline error for task {task_id}: {e}")
+        task_manager.mark_failed(task_id, str(e))
+        raise
+
+@api_router.post("/train")
+async def train_model(
+    request: TrainRequest,
+    current_user: dict = Depends(get_current_user),
+    background: Optional[bool] = Query(None)
+):
+    """
+    Train machine learning models.
+    Supports both synchronous execution (offloaded to threadpool to prevent event loop starvation)
+    and asynchronous execution with status polling via /api/train/status/{task_id}.
+    """
+    try:
+        await verify_dataset_access(request.dataset_id, current_user)
+        is_bg = background if background is not None else getattr(request, 'background', False)
+        task_id = str(uuid.uuid4())
+        models_requested = request.models if request.models else ALLOWED_MODELS
+
+        task_manager.register_task(
+            task_id=task_id,
+            dataset_id=request.dataset_id,
+            user_id=current_user["id"],
+            target_column=request.target_column,
+            models=models_requested
+        )
+
+        if is_bg:
+            task_manager.executor.submit(
+                execute_training_pipeline_sync,
+                task_id,
+                request.dataset_id,
+                request.target_column,
+                models_requested,
+                request.test_size,
+                request.random_state,
+                request.cv_folds
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "task_id": task_id,
+                    "status": "queued",
+                    "dataset_id": request.dataset_id,
+                    "message": "Training job queued. Poll /api/train/status/{task_id} for progress."
+                }
+            )
+
+        try:
+            results, best_model_name = await asyncio.to_thread(
+                execute_training_pipeline_sync,
+                task_id,
+                request.dataset_id,
+                request.target_column,
+                models_requested,
+                request.test_size,
+                request.random_state,
+                request.cv_folds
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
+        return {"task_id": task_id, "results": results, "best_model": best_model_name}
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Train error")
         raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/train/async")
+async def train_model_async(
+    request: TrainRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Submit a training job to the background queue and return task_id immediately."""
+    await verify_dataset_access(request.dataset_id, current_user)
+    task_id = str(uuid.uuid4())
+    models_requested = request.models if request.models else ALLOWED_MODELS
+
+    task_manager.register_task(
+        task_id=task_id,
+        dataset_id=request.dataset_id,
+        user_id=current_user["id"],
+        target_column=request.target_column,
+        models=models_requested
+    )
+
+    task_manager.executor.submit(
+        execute_training_pipeline_sync,
+        task_id,
+        request.dataset_id,
+        request.target_column,
+        models_requested,
+        request.test_size,
+        request.random_state,
+        request.cv_folds
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "task_id": task_id,
+            "status": "queued",
+            "dataset_id": request.dataset_id,
+            "message": "Training job queued. Poll /api/train/status/{task_id} for progress."
+        }
+    )
+
+@api_router.get("/train/status/{task_id}")
+async def get_train_status(
+    task_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Poll status of a background training task."""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Training task not found.")
+    await verify_dataset_access(task["dataset_id"], current_user)
+    return task
+
+@api_router.get("/train/jobs/{dataset_id}")
+async def list_train_jobs(
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """List recent training tasks for a given dataset."""
+    await verify_dataset_access(dataset_id, current_user)
+    return await asyncio.to_thread(
+        task_manager.list_tasks_for_dataset, dataset_id, current_user["id"]
+    )
+
+def _get_models_sync(dataset_id: str) -> dict:
+    dataset_path = get_dataset_path(dataset_id)
+    candidates_file = dataset_path / "model_candidates.json"
+    if not candidates_file.exists():
+        raise FileNotFoundError("No trained models found for this dataset.")
+
+    with open(candidates_file, "r") as f:
+        data = json.load(f)
+
+    # Filter out any unsupported models from legacy workspaces
+    if "models" in data and isinstance(data["models"], list):
+        valid_models = [m for m in data["models"] if m.get("model_name") in ALLOWED_MODELS]
+        if valid_models:
+            data["models"] = valid_models
+            if data.get("best_model") not in ALLOWED_MODELS:
+                best = min(valid_models, key=lambda x: x.get('rmse', float('inf')))
+                data["best_model"] = best["model_name"]
+    return data
 
 @api_router.get("/models/{dataset_id}")
 async def get_models(
@@ -841,27 +1060,41 @@ async def get_models(
     current_user: dict = Depends(get_current_user)
 ):
     await verify_dataset_access(dataset_id, current_user)
-    dataset_path = get_dataset_path(dataset_id)
-    candidates_file = dataset_path / "model_candidates.json"
-    if not candidates_file.exists():
-        raise HTTPException(status_code=404, detail="No trained models found for this dataset.")
-
     try:
-        with open(candidates_file, "r") as f:
-            data = json.load(f)
-
-        # FR-5.5 / AC-9: Safely filter out stale LinearRegression or LightGBM models from legacy workspaces
-        if "models" in data and isinstance(data["models"], list):
-            valid_models = [m for m in data["models"] if m.get("model_name") in ALLOWED_MODELS]
-            if valid_models:
-                data["models"] = valid_models
-                if data.get("best_model") not in ALLOWED_MODELS:
-                    best = min(valid_models, key=lambda x: x.get('rmse', float('inf')))
-                    data["best_model"] = best["model_name"]
-        return data
+        return await asyncio.to_thread(_get_models_sync, dataset_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No trained models found for this dataset.")
     except Exception as e:
         logger.exception("Get models error")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _predict_rows_sync(dataset_id: str, model_name: str, rows: List[Dict]) -> List[float]:
+    dataset_path = get_dataset_path(dataset_id)
+    model_file = dataset_path / f"model_{model_name}.pkl"
+    if not model_file.exists():
+        raise FileNotFoundError(f"Model '{model_name}' not found. Please train models first.")
+
+    model = safe_load_artifact(model_file)
+    preprocessor = safe_load_artifact(dataset_path / "preprocessor.pkl")
+
+    try:
+        with open(dataset_path / "training_features.json", "r") as f:
+            expected_features = json.load(f)
+    except FileNotFoundError:
+        raise ValueError("Feature definitions missing. Retrain the model.")
+
+    df_input = pd.DataFrame(rows)
+    if hasattr(preprocessor, 'is_housing') and preprocessor.is_housing:
+        X_transformed = preprocessor.transform(df_input)
+    else:
+        for col in expected_features:
+            if col not in df_input.columns:
+                df_input[col] = np.nan
+        df_input = df_input[[c for c in expected_features if c in df_input.columns]]
+        X_transformed = preprocessor.transform(df_input)
+
+    predictions = model.predict(X_transformed)
+    return [float(p) for p in predictions]
 
 @api_router.post("/predict")
 async def predict(
@@ -870,33 +1103,19 @@ async def predict(
 ):
     try:
         await verify_dataset_access(request.dataset_id, current_user)
-        dataset_path = get_dataset_path(request.dataset_id)
-        model_file = dataset_path / f"model_{request.model_name}.pkl"
-        if not model_file.exists():
-            raise HTTPException(status_code=404, detail=f"Model '{request.model_name}' not found. Please train models first.")
-
-        model = joblib.load(model_file)
-        preprocessor = joblib.load(dataset_path / "preprocessor.pkl")
-
         try:
-            with open(dataset_path / "training_features.json", "r") as f:
-                expected_features = json.load(f)
-        except FileNotFoundError:
-            raise HTTPException(status_code=400, detail="Feature definitions missing. Retrain the model.")
+            predictions = await asyncio.to_thread(
+                _predict_rows_sync, request.dataset_id, request.model_name, request.rows
+            )
+        except SecurityException as se:
+            logger.error(f"Security Alert in predict: {se}")
+            raise HTTPException(status_code=403, detail="Untrusted or tampered model artifact detected.")
+        except FileNotFoundError as fe:
+            raise HTTPException(status_code=404, detail=str(fe))
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
 
-        df_input = pd.DataFrame(request.rows)
-        if hasattr(preprocessor, 'is_housing') and preprocessor.is_housing:
-            X_transformed = preprocessor.transform(df_input)
-        else:
-            for col in expected_features:
-                if col not in df_input.columns:
-                    df_input[col] = np.nan
-            df_input = df_input[[c for c in expected_features if c in df_input.columns]]
-            X_transformed = preprocessor.transform(df_input)
-
-        predictions = model.predict(X_transformed)
-
-        # Log predictions to SQLite audit log
+        # Log predictions to SQLite audit log asynchronously
         for row, pred in zip(request.rows, predictions):
             try:
                 await database.save_prediction(
@@ -908,12 +1127,60 @@ async def predict(
             except Exception as e:
                 logger.warning(f"Failed to record prediction in SQLite: {e}")
 
-        return {"predictions": [float(p) for p in predictions]}
+        return {"predictions": predictions}
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Prediction error")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _predict_random_sync(dataset_id: str, model_name: str) -> dict:
+    dataset_path = get_dataset_path(dataset_id)
+    model_file = dataset_path / f"model_{model_name}.pkl"
+    if not model_file.exists():
+        raise FileNotFoundError(f"Model '{model_name}' not found.")
+
+    model = safe_load_artifact(model_file)
+    preprocessor = safe_load_artifact(dataset_path / "preprocessor.pkl")
+
+    with open(dataset_path / "training_features.json", "r") as f:
+        expected_features = json.load(f)
+
+    df = load_dataset(dataset_id)
+    sample_row = df.sample(n=1, random_state=None)
+
+    if hasattr(preprocessor, 'is_housing') and preprocessor.is_housing:
+        X_transformed = preprocessor.transform(sample_row)
+        prediction = float(model.predict(X_transformed)[0])
+        input_dict = sample_row.iloc[0].replace({np.nan: None}).to_dict()
+    else:
+        input_data = sample_row[[c for c in expected_features if c in sample_row.columns]]
+        X_transformed = preprocessor.transform(input_data)
+        prediction = float(model.predict(X_transformed)[0])
+        input_dict = input_data.iloc[0].replace({np.nan: None}).to_dict()
+
+    target_column = None
+    try:
+        with open(dataset_path / "model_candidates.json", "r") as f:
+            model_info = json.load(f)
+        target_column = model_info.get('target_column')
+    except Exception:
+        pass
+
+    actual = None
+    diff = None
+    if target_column and target_column in sample_row.columns:
+        val = sample_row[target_column].iloc[0]
+        if pd.notna(val):
+            actual = float(val)
+            diff = float(abs(prediction - actual))
+
+    return {
+        "inputs": input_dict,
+        "prediction": prediction,
+        "actual_target": actual,
+        "difference": diff
+    }
 
 @api_router.get("/predict/random/{dataset_id}/{model_name}")
 async def predict_random(
@@ -923,65 +1190,28 @@ async def predict_random(
 ):
     try:
         await verify_dataset_access(dataset_id, current_user)
-        dataset_path = get_dataset_path(dataset_id)
-        model_file = dataset_path / f"model_{model_name}.pkl"
-        if not model_file.exists():
-            raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found.")
-
-        model = joblib.load(model_file)
-        preprocessor = joblib.load(dataset_path / "preprocessor.pkl")
-
-        with open(dataset_path / "training_features.json", "r") as f:
-            expected_features = json.load(f)
-
-        df = load_dataset(dataset_id)
-        sample_row = df.sample(n=1, random_state=None)
-
-        if hasattr(preprocessor, 'is_housing') and preprocessor.is_housing:
-            X_transformed = preprocessor.transform(sample_row)
-            prediction = float(model.predict(X_transformed)[0])
-            input_dict = sample_row.iloc[0].replace({np.nan: None}).to_dict()
-        else:
-            input_data = sample_row[[c for c in expected_features if c in sample_row.columns]]
-            X_transformed = preprocessor.transform(input_data)
-            prediction = float(model.predict(X_transformed)[0])
-            input_dict = input_data.iloc[0].replace({np.nan: None}).to_dict()
-
-        target_column = None
         try:
-            with open(dataset_path / "model_candidates.json", "r") as f:
-                model_info = json.load(f)
-            target_column = model_info.get('target_column')
-        except Exception:
-            pass
+            eval_res = await asyncio.to_thread(_predict_random_sync, dataset_id, model_name)
+        except SecurityException as se:
+            logger.error(f"Security Alert in predict_random: {se}")
+            raise HTTPException(status_code=403, detail="Untrusted or tampered model artifact detected.")
+        except FileNotFoundError as fe:
+            raise HTTPException(status_code=404, detail=str(fe))
 
-        actual = None
-        diff = None
-        if target_column and target_column in sample_row.columns:
-            val = sample_row[target_column].iloc[0]
-            if pd.notna(val):
-                actual = float(val)
-                diff = float(abs(prediction - actual))
-
-        # Log evaluation to SQLite
+        # Log evaluation to SQLite asynchronously
         try:
             await database.save_prediction(
                 dataset_id=dataset_id,
                 model_name=model_name,
-                inputs=input_dict,
-                prediction_value=prediction,
-                actual_value=actual,
-                difference=diff
+                inputs=eval_res["inputs"],
+                prediction_value=eval_res["prediction"],
+                actual_value=eval_res["actual_target"],
+                difference=eval_res["difference"]
             )
         except Exception as e:
             logger.warning(f"Failed to record random prediction evaluation in SQLite: {e}")
 
-        return {
-            "inputs": input_dict,
-            "prediction": prediction,
-            "actual_target": actual,
-            "difference": diff
-        }
+        return eval_res
     except HTTPException:
         raise
     except Exception as e:
@@ -996,7 +1226,7 @@ async def sync_dataset_internet_endpoint(
     try:
         await verify_dataset_access(dataset_id, current_user)
         dataset_path = get_dataset_path(dataset_id)
-        df = sync_internet_dataset(dataset_path)
+        df = await asyncio.to_thread(sync_internet_dataset, dataset_path)
         await database.save_dataset(
             dataset_id=dataset_id,
             filename="Bengaluru_House_Data.csv",
@@ -1050,8 +1280,11 @@ async def get_explainability(
                 detail=f"Model '{model_name}' is not supported. Supported models: {', '.join(ALLOWED_MODELS)}"
             )
 
-        feature_imp = await asyncio.to_thread(get_feature_importance, dataset_id, model_name)
-        shap_data = await asyncio.to_thread(compute_shap_values, dataset_id, model_name, 40)
+        # Offload feature importance and SHAP computations concurrently to worker threads
+        feature_imp, shap_data = await asyncio.gather(
+            asyncio.to_thread(get_feature_importance, dataset_id, model_name),
+            asyncio.to_thread(compute_shap_values, dataset_id, model_name, 40)
+        )
         return {
             "model_name": model_name,
             "feature_importance": feature_imp,

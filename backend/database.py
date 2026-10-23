@@ -136,6 +136,29 @@ def init_db():
                 (datetime.now(timezone.utc).isoformat(),)
             )
 
+            # 6. Training Tasks Table (Asynchronous task queue tracking)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS training_tasks (
+                    id TEXT PRIMARY KEY,
+                    dataset_id TEXT NOT NULL,
+                    user_id TEXT,
+                    status TEXT NOT NULL,
+                    progress INTEGER DEFAULT 0,
+                    stage TEXT DEFAULT '',
+                    target_column TEXT NOT NULL,
+                    models_json TEXT NOT NULL,
+                    results_json TEXT,
+                    best_model TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_dataset ON training_tasks(dataset_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user ON training_tasks(user_id);")
+
         # Sync existing workspace datasets into SQLite
         _sync_workspace_datasets(conn)
         logger.info(f"SQLite database initialized successfully at: {get_db_path()} with WAL mode.")
@@ -432,6 +455,7 @@ def _get_db_stats_sync() -> dict:
         datasets_count = conn.execute("SELECT COUNT(*) FROM datasets").fetchone()[0]
         models_count = conn.execute("SELECT COUNT(*) FROM models").fetchone()[0]
         predictions_count = conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+        tasks_count = conn.execute("SELECT COUNT(*) FROM training_tasks").fetchone()[0]
         sqlite_ver = conn.execute("SELECT sqlite_version()").fetchone()[0]
 
         return {
@@ -445,7 +469,8 @@ def _get_db_stats_sync() -> dict:
                 "users": users_count,
                 "datasets": datasets_count,
                 "models": models_count,
-                "predictions": predictions_count
+                "predictions": predictions_count,
+                "training_tasks": tasks_count
             },
             "status": "healthy"
         }
@@ -490,3 +515,148 @@ async def get_predictions(dataset_id: str, limit: int = 50) -> List[dict]:
 
 async def get_db_stats() -> dict:
     return await asyncio.to_thread(_get_db_stats_sync)
+
+def _save_task_sync(task_id: str, dataset_id: str, user_id: Optional[str],
+                    target_column: str, models: List[str], status: str = "queued",
+                    progress: int = 0, stage: str = "") -> dict:
+    conn = get_connection()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        models_str = json.dumps(models)
+        with conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO training_tasks
+                (id, dataset_id, user_id, status, progress, stage, target_column, models_json,
+                 results_json, best_model, error, created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)
+            """, (task_id, dataset_id, user_id, status, progress, stage, target_column, models_str, now, now))
+        return {
+            "id": task_id,
+            "dataset_id": dataset_id,
+            "user_id": user_id,
+            "status": status,
+            "progress": progress,
+            "stage": stage,
+            "target_column": target_column,
+            "models": models,
+            "created_at": now,
+            "updated_at": now
+        }
+    finally:
+        conn.close()
+
+def _update_task_sync(task_id: str, status: str, progress: int, stage: str,
+                      results: Optional[List[dict]] = None, best_model: Optional[str] = None,
+                      error: Optional[str] = None) -> Optional[dict]:
+    conn = get_connection()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        results_str = json.dumps(results) if results is not None else None
+        completed_at = now if status in ("completed", "failed") else None
+        with conn:
+            if results is not None or best_model is not None or error is not None:
+                conn.execute("""
+                    UPDATE training_tasks
+                    SET status = ?, progress = ?, stage = ?,
+                        results_json = COALESCE(?, results_json),
+                        best_model = COALESCE(?, best_model),
+                        error = ?, updated_at = ?,
+                        completed_at = COALESCE(?, completed_at)
+                    WHERE id = ?
+                """, (status, progress, stage, results_str, best_model, error, now, completed_at, task_id))
+            else:
+                conn.execute("""
+                    UPDATE training_tasks
+                    SET status = ?, progress = ?, stage = ?, updated_at = ?
+                    WHERE id = ?
+                """, (status, progress, stage, now, task_id))
+        cur = conn.execute("SELECT * FROM training_tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["models"] = json.loads(d.get("models_json", "[]"))
+        except Exception:
+            d["models"] = []
+        try:
+            d["results"] = json.loads(d.get("results_json")) if d.get("results_json") else None
+        except Exception:
+            d["results"] = None
+        return d
+    finally:
+        conn.close()
+
+def _get_task_sync(task_id: str) -> Optional[dict]:
+    conn = get_connection()
+    try:
+        cur = conn.execute("SELECT * FROM training_tasks WHERE id = ? LIMIT 1", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        try:
+            d["models"] = json.loads(d.get("models_json", "[]"))
+        except Exception:
+            d["models"] = []
+        try:
+            d["results"] = json.loads(d.get("results_json")) if d.get("results_json") else None
+        except Exception:
+            d["results"] = None
+        return d
+    finally:
+        conn.close()
+
+def _list_tasks_sync(dataset_id: Optional[str] = None, user_id: Optional[str] = None, limit: int = 20) -> List[dict]:
+    conn = get_connection()
+    try:
+        if dataset_id and user_id:
+            cur = conn.execute(
+                "SELECT * FROM training_tasks WHERE dataset_id = ? AND (user_id = ? OR user_id IS NULL) ORDER BY created_at DESC LIMIT ?",
+                (dataset_id, user_id, limit)
+            )
+        elif dataset_id:
+            cur = conn.execute(
+                "SELECT * FROM training_tasks WHERE dataset_id = ? ORDER BY created_at DESC LIMIT ?",
+                (dataset_id, limit)
+            )
+        elif user_id:
+            cur = conn.execute(
+                "SELECT * FROM training_tasks WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit)
+            )
+        else:
+            cur = conn.execute("SELECT * FROM training_tasks ORDER BY created_at DESC LIMIT ?", (limit,))
+        
+        results = []
+        for r in cur.fetchall():
+            d = dict(r)
+            try:
+                d["models"] = json.loads(d.get("models_json", "[]"))
+            except Exception:
+                d["models"] = []
+            try:
+                d["results"] = json.loads(d.get("results_json")) if d.get("results_json") else None
+            except Exception:
+                d["results"] = None
+            results.append(d)
+        return results
+    finally:
+        conn.close()
+
+async def save_task(task_id: str, dataset_id: str, user_id: Optional[str],
+                    target_column: str, models: List[str], status: str = "queued",
+                    progress: int = 0, stage: str = "") -> dict:
+    return await asyncio.to_thread(_save_task_sync, task_id, dataset_id, user_id, target_column, models, status, progress, stage)
+
+async def update_task(task_id: str, status: str, progress: int, stage: str,
+                      results: Optional[List[dict]] = None, best_model: Optional[str] = None,
+                      error: Optional[str] = None) -> Optional[dict]:
+    return await asyncio.to_thread(_update_task_sync, task_id, status, progress, stage, results, best_model, error)
+
+async def get_task(task_id: str) -> Optional[dict]:
+    return await asyncio.to_thread(_get_task_sync, task_id)
+
+async def list_tasks(dataset_id: Optional[str] = None, user_id: Optional[str] = None, limit: int = 20) -> List[dict]:
+    return await asyncio.to_thread(_list_tasks_sync, dataset_id, user_id, limit)
+

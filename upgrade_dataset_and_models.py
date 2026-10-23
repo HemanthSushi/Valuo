@@ -125,12 +125,17 @@ def download_and_upgrade():
     print(f"XGBoost Results      -> R2: {r2_xgb:.4f} ({r2_xgb*100:.2f}%), RMSE: {rmse_xgb:.2f}, MAE: {mae_xgb:.2f}")
 
     # Save artifacts using module references (compress RF to stay within GitHub 100MB limit)
+    import security
     joblib.dump(preprocessor, target_dir / "preprocessor.pkl")
+    security.sign_artifact(target_dir / "preprocessor.pkl")
     joblib.dump(rf_model, target_dir / "model_RandomForest.pkl", compress=3)
+    security.sign_artifact(target_dir / "model_RandomForest.pkl")
     joblib.dump(xgb_model, target_dir / "model_XGBoost.pkl")
+    security.sign_artifact(target_dir / "model_XGBoost.pkl")
 
     best_model_name = "XGBoost" if r2_xgb >= r2_rf else "RandomForest"
     shutil.copy(target_dir / f"model_{best_model_name}.pkl", target_dir / "model_best.pkl")
+    security.sign_artifact(target_dir / "model_best.pkl")
 
     results = [
         {

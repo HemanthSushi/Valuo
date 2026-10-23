@@ -174,6 +174,46 @@ class ValuoAPITester:
         }
         return self.run_test("Train Models (RF & XGBoost)", "POST", "train", 200, data=train_data)
 
+    def test_train_models_async_and_polling(self):
+        train_data = {
+            "dataset_id": self.dataset_id,
+            "target_column": "price",
+            "models": ["RandomForest", "XGBoost"],
+            "test_size": 0.25,
+            "random_state": 42
+        }
+        # 1. Post to async training endpoint
+        success, resp = self.run_test("Dispatch Async Training Task (/api/train/async)", "POST", "train/async", 202, data=train_data)
+        if not success or "task_id" not in resp:
+            return False, {}
+        task_id = resp["task_id"]
+
+        # 2. Concurrency test: ping root health check while background worker is running
+        t0 = time.time()
+        health_res = requests.get(f"{self.api_url}/", timeout=5)
+        dt_ms = (time.time() - t0) * 1000
+        concurrency_ok = health_res.status_code == 200 and dt_ms < 1000
+        self.log_test("Event Loop Liveness during ML Task (concurrent /api/ < 1s)", concurrency_ok, f"Status: {health_res.status_code}, Latency: {dt_ms:.1f}ms")
+
+        # 3. Poll /api/train/status/{task_id}
+        completed = False
+        final_resp = {}
+        for _ in range(30):
+            time.sleep(0.4)
+            s_res = requests.get(
+                f"{self.api_url}/train/status/{task_id}",
+                headers={"Authorization": f"Bearer {self.token}"} if self.token else {}
+            )
+            if s_res.status_code == 200:
+                s_data = s_res.json()
+                if s_data.get("status") == "completed":
+                    completed = True
+                    final_resp = s_data
+                    break
+
+        self.log_test("Background Task Completion via Status Polling", completed, f"Final status: {final_resp.get('status')}")
+        return completed, final_resp
+
     def test_get_models(self):
         return self.run_test("Get Model Leaderboard", "GET", f"models/{self.dataset_id}", 200)
 
@@ -195,6 +235,42 @@ class ValuoAPITester:
 
     def test_predict_random(self):
         return self.run_test("Random Test Row Evaluation", "GET", f"predict/random/{self.dataset_id}/RandomForest", 200)
+
+    def test_tampered_model_signature_rejection(self):
+        if not self.dataset_id:
+            return False, {}
+        model_file = Path(__file__).parent / "backend" / "workspace" / self.dataset_id / "model_RandomForest.pkl"
+        if not model_file.exists():
+            return False, {}
+
+        original_bytes = model_file.read_bytes()
+        try:
+            # Tamper with the model file by appending bytes
+            with open(model_file, "ab") as f:
+                f.write(b"ATTACKER_TAMPERED_BYTES")
+
+            predict_data = {
+                "dataset_id": self.dataset_id,
+                "model_name": "RandomForest",
+                "rows": [{
+                    "area_sqft": 1500,
+                    "bedrooms": 3,
+                    "bathrooms": 2,
+                    "location": "Whitefield"
+                }]
+            }
+            # The backend must reject the tampered artifact with HTTP 403 Forbidden
+            success, _ = self.run_test(
+                "Reject Tampered Model Deserialization (HMAC-SHA256)",
+                "POST",
+                "predict",
+                403,
+                data=predict_data
+            )
+            return success, {}
+        finally:
+            # Restore original clean model bytes
+            model_file.write_bytes(original_bytes)
 
     def test_db_stats(self):
         success, resp = self.run_test("SQLite Storage Stats", "GET", "db/stats", 200)
@@ -255,10 +331,12 @@ class ValuoAPITester:
         print("\nTraining models (Random Forest & XGBoost)...")
         train_success, _ = self.test_train_models()
         if train_success:
+            self.test_train_models_async_and_polling()
             self.test_get_models()
             self.test_explainability()
             self.test_predict()
             self.test_predict_random()
+            self.test_tampered_model_signature_rejection()
             self.test_get_predictions()
 
         self.test_auth_logout()
